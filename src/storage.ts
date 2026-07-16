@@ -1,6 +1,13 @@
+import { supabase } from "./supabase";
 import { Project } from "./types";
 
 const STORAGE_KEY = "loom.projects.v1";
+const SUPABASE_PROJECTS_TABLE = "projects";
+const EMPTY_PROJECT_ID = "__empty__";
+
+type ProjectRow = {
+  data: Project;
+};
 
 const seedProjects: Project[] = [
   {
@@ -35,6 +42,16 @@ const seedProjects: Project[] = [
         done: false,
         createdAt: "2026-07-16T12:20:00.000Z",
         updatedAt: "2026-07-16T12:20:00.000Z",
+      },
+    ],
+    materials: [
+      {
+        id: "material-loom-notes",
+        title: "Заметки по продукту",
+        markdown:
+          "# Loom MVP\n\n## Фокус\n\n- Проекты\n- Задачи\n- Markdown-материалы\n\n> Не строим Notion целиком. Собираем личный рабочий инструмент.",
+        createdAt: "2026-07-16T12:45:00.000Z",
+        updatedAt: "2026-07-16T12:45:00.000Z",
       },
     ],
     createdAt: "2026-07-16T12:00:00.000Z",
@@ -81,6 +98,16 @@ const seedProjects: Project[] = [
         updatedAt: "2026-07-16T12:40:00.000Z",
       },
     ],
+    materials: [
+      {
+        id: "material-home-criteria",
+        title: "Критерии дома",
+        markdown:
+          "# Критерии дома\n\n## Обязательное\n\n- Тихое место\n- Нормальная дорога\n- Интернет\n\n## Проверить\n\n- Документы\n- Коммуникации\n- Соседи",
+        createdAt: "2026-07-16T12:50:00.000Z",
+        updatedAt: "2026-07-16T12:50:00.000Z",
+      },
+    ],
     createdAt: "2026-07-16T12:05:00.000Z",
     updatedAt: "2026-07-16T12:05:00.000Z",
   },
@@ -99,6 +126,7 @@ function normalizeProject(project: Project): Project {
   const normalizedProject = {
     ...project,
     tasks: Array.isArray(project.tasks) ? project.tasks : [],
+    materials: Array.isArray(project.materials) ? project.materials : [],
   };
 
   return {
@@ -107,11 +135,11 @@ function normalizeProject(project: Project): Project {
   };
 }
 
-export function loadProjects(): Project[] {
+function loadProjectsFromLocalStorage(): Project[] {
   const raw = window.localStorage.getItem(STORAGE_KEY);
 
   if (!raw) {
-    saveProjects(seedProjects);
+    saveProjectsToLocalStorage(seedProjects);
     return seedProjects;
   }
 
@@ -123,6 +151,99 @@ export function loadProjects(): Project[] {
   }
 }
 
-export function saveProjects(projects: Project[]) {
+function saveProjectsToLocalStorage(projects: Project[]) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+}
+
+async function ensureSupabaseSession() {
+  if (!supabase) {
+    return;
+  }
+
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  if (session) {
+    return;
+  }
+
+  const { error } = await supabase.auth.signInAnonymously();
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function loadProjects(): Promise<Project[]> {
+  if (!supabase) {
+    return loadProjectsFromLocalStorage();
+  }
+
+  await ensureSupabaseSession();
+
+  const { data, error } = await supabase
+    .from(SUPABASE_PROJECTS_TABLE)
+    .select("data")
+    .order("updated_at", { ascending: false });
+
+  if (error) {
+    throw error;
+  }
+
+  const rows = (data ?? []) as ProjectRow[];
+
+  if (!rows.length) {
+    await saveProjects(seedProjects);
+    return seedProjects;
+  }
+
+  return rows.map((row) => normalizeProject(row.data));
+}
+
+export async function saveProjects(projects: Project[]) {
+  saveProjectsToLocalStorage(projects);
+
+  if (!supabase) {
+    return;
+  }
+
+  await ensureSupabaseSession();
+
+  const rows = projects.map((project) => ({
+    id: project.id,
+    data: normalizeProject(project),
+    updated_at: project.updatedAt,
+  }));
+
+  if (rows.length) {
+    const { error } = await supabase
+      .from(SUPABASE_PROJECTS_TABLE)
+      .upsert(rows, { onConflict: "id" });
+
+    if (error) {
+      throw error;
+    }
+
+    const ids = rows.map((row) => row.id).join(",");
+    const { error: deleteError } = await supabase
+      .from(SUPABASE_PROJECTS_TABLE)
+      .delete()
+      .not("id", "in", `(${ids})`);
+
+    if (deleteError) {
+      throw deleteError;
+    }
+
+    return;
+  }
+
+  const { error } = await supabase
+    .from(SUPABASE_PROJECTS_TABLE)
+    .delete()
+    .neq("id", EMPTY_PROJECT_ID);
+
+  if (error) {
+    throw error;
+  }
 }

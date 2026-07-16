@@ -9,6 +9,15 @@ export type ProjectTask = {
   updatedAt: string;
 };
 
+export type ProjectMaterial = {
+  id: string;
+  title: string;
+  markdown: string;
+  taskId?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type Project = {
   id: string;
   title: string;
@@ -21,6 +30,7 @@ export type Project = {
   icon: string;
   progress: number;
   tasks: ProjectTask[];
+  materials: ProjectMaterial[];
   createdAt: string;
   updatedAt: string;
 };

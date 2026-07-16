@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   Archive,
   CalendarDays,
@@ -6,6 +6,7 @@ import {
   CirclePause,
   Clock3,
   Edit3,
+  FileText,
   Filter,
   ListChecks,
   Plus,
@@ -14,8 +15,16 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { MaterialEditor } from "./MaterialEditor";
 import { loadProjects, saveProjects } from "./storage";
-import { Project, ProjectDraft, ProjectPriority, ProjectStatus, ProjectTask } from "./types";
+import {
+  Project,
+  ProjectDraft,
+  ProjectMaterial,
+  ProjectPriority,
+  ProjectStatus,
+  ProjectTask,
+} from "./types";
 
 const statusLabels: Record<ProjectStatus, string> = {
   active: "В работе",
@@ -69,6 +78,7 @@ function createProject(draft: ProjectDraft): Project {
     icon: draft.icon.trim().slice(0, 2).toUpperCase() || "L",
     progress: 0,
     tasks: [],
+    materials: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -113,16 +123,53 @@ function isOverdue(project: Project) {
 }
 
 export function App() {
-  const [projects, setProjects] = useState<Project[]>(() => loadProjects());
-  const [selectedId, setSelectedId] = useState(() => projects[0]?.id ?? "");
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedId, setSelectedId] = useState("");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | "all">("all");
   const [draft, setDraft] = useState<ProjectDraft>(emptyDraft);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [selectedMaterialId, setSelectedMaterialId] = useState("");
+  const [isLoadingProjects, setIsLoadingProjects] = useState(true);
+  const [storageError, setStorageError] = useState("");
+
+  useEffect(() => {
+    let isMounted = true;
+
+    loadProjects()
+      .then((loadedProjects) => {
+        if (!isMounted) {
+          return;
+        }
+
+        setProjects(loadedProjects);
+        setSelectedId((currentId) => currentId || loadedProjects[0]?.id || "");
+        setStorageError("");
+      })
+      .catch((error) => {
+        console.error(error);
+
+        if (isMounted) {
+          setStorageError("Не удалось загрузить данные.");
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLoadingProjects(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const selectedProject = projects.find((project) => project.id === selectedId) ?? projects[0];
+  const selectedMaterial =
+    selectedProject?.materials.find((material) => material.id === selectedMaterialId) ??
+    selectedProject?.materials[0];
 
   const filteredProjects = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -135,8 +182,14 @@ export function App() {
   }, [projects, query, statusFilter]);
 
   function commitProjects(nextProjects: Project[]) {
+    const previousProjects = projects;
+
     setProjects(nextProjects);
-    saveProjects(nextProjects);
+    saveProjects(nextProjects).catch((error) => {
+      console.error(error);
+      setStorageError("Не удалось сохранить данные.");
+      setProjects(previousProjects);
+    });
   }
 
   function updateProjectTasks(projectId: string, nextTasks: ProjectTask[]) {
@@ -149,6 +202,22 @@ export function App() {
               ...project,
               tasks: nextTasks,
               progress: calculateProgress(nextTasks),
+              updatedAt: now,
+            }
+          : project,
+      ),
+    );
+  }
+
+  function updateProjectMaterials(projectId: string, nextMaterials: ProjectMaterial[]) {
+    const now = new Date().toISOString();
+
+    commitProjects(
+      projects.map((project) =>
+        project.id === projectId
+          ? {
+              ...project,
+              materials: nextMaterials,
               updatedAt: now,
             }
           : project,
@@ -261,6 +330,45 @@ export function App() {
     );
   }
 
+  function addMaterial(project: Project) {
+    const now = new Date().toISOString();
+    const material: ProjectMaterial = {
+      id: crypto.randomUUID(),
+      title: `Материал ${project.materials.length + 1}`,
+      markdown: "# Новый материал\n\nНачни писать здесь.",
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    updateProjectMaterials(project.id, [...project.materials, material]);
+    setSelectedMaterialId(material.id);
+  }
+
+  function updateMaterialMarkdown(project: Project, materialId: string, markdown: string) {
+    const now = new Date().toISOString();
+    const nextMaterials = project.materials.map((material) =>
+      material.id === materialId ? { ...material, markdown, updatedAt: now } : material,
+    );
+
+    updateProjectMaterials(project.id, nextMaterials);
+  }
+
+  function renameMaterial(project: Project, materialId: string, title: string) {
+    const now = new Date().toISOString();
+    const nextMaterials = project.materials.map((material) =>
+      material.id === materialId ? { ...material, title, updatedAt: now } : material,
+    );
+
+    updateProjectMaterials(project.id, nextMaterials);
+  }
+
+  function deleteMaterial(project: Project, materialId: string) {
+    const nextMaterials = project.materials.filter((material) => material.id !== materialId);
+
+    updateProjectMaterials(project.id, nextMaterials);
+    setSelectedMaterialId(nextMaterials[0]?.id ?? "");
+  }
+
   return (
     <main className="app-shell">
       <section className="sidebar" aria-label="Проекты">
@@ -303,7 +411,10 @@ export function App() {
               key={project.id}
               className={selectedProject?.id === project.id ? "project-row selected" : "project-row"}
               type="button"
-              onClick={() => setSelectedId(project.id)}
+              onClick={() => {
+                setSelectedId(project.id);
+                setSelectedMaterialId("");
+              }}
             >
               <span className="project-icon">{project.icon}</span>
               <span className="project-copy">
@@ -320,7 +431,14 @@ export function App() {
       </section>
 
       <section className="project-view" aria-label="Обзор проекта">
-        {selectedProject ? (
+        {storageError ? <div className="storage-banner">{storageError}</div> : null}
+
+        {isLoadingProjects ? (
+          <div className="empty-state">
+            <h2>Загружаем проекты</h2>
+            <p>Подключаемся к хранилищу и готовим рабочую область.</p>
+          </div>
+        ) : selectedProject ? (
           <>
             <header className="project-header">
               <div className="project-heading">
@@ -460,16 +578,87 @@ export function App() {
               </div>
             </section>
 
-            <div className="placeholder-grid">
-              <div>
-                <h3>Заметки</h3>
-                <p>Заметки и ссылки будут привязаны к проекту.</p>
+            <section className="section-block materials-section">
+              <div className="section-title-row">
+                <div>
+                  <h3>Материалы</h3>
+                  <p>Markdown-документы проекта: заметки, планы, ссылки и черновики.</p>
+                </div>
+                <button
+                  className="text-button primary"
+                  type="button"
+                  onClick={() => addMaterial(selectedProject)}
+                >
+                  <Plus size={16} />
+                  Документ
+                </button>
               </div>
-              <div>
-                <h3>Файлы</h3>
-                <p>Файлы и документы подключим позже.</p>
+
+              <div className="materials-layout">
+                <div className="material-list" aria-label="Материалы проекта">
+                  {selectedProject.materials.length ? (
+                    selectedProject.materials.map((material) => (
+                      <button
+                        className={
+                          selectedMaterial?.id === material.id ? "material-row selected" : "material-row"
+                        }
+                        key={material.id}
+                        type="button"
+                        onClick={() => setSelectedMaterialId(material.id)}
+                      >
+                        <FileText size={16} />
+                        <span>{material.title}</span>
+                      </button>
+                    ))
+                  ) : (
+                    <p className="muted">Пока нет материалов.</p>
+                  )}
+                </div>
+
+                <div className="material-editor-panel">
+                  {selectedMaterial ? (
+                    <>
+                      <div className="material-title-row">
+                        <input
+                          value={selectedMaterial.title}
+                          onChange={(event) =>
+                            renameMaterial(selectedProject, selectedMaterial.id, event.target.value)
+                          }
+                          aria-label="Название материала"
+                        />
+                        <button
+                          className="icon-button danger"
+                          type="button"
+                          onClick={() => deleteMaterial(selectedProject, selectedMaterial.id)}
+                          title="Удалить материал"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                      <MaterialEditor
+                        markdown={selectedMaterial.markdown}
+                        onChange={(markdown) =>
+                          updateMaterialMarkdown(selectedProject, selectedMaterial.id, markdown)
+                        }
+                      />
+                    </>
+                  ) : (
+                    <div className="material-empty">
+                      <h3>Создай первый материал</h3>
+                      <p>Он будет храниться как Markdown и останется связанным с проектом.</p>
+                      <button
+                        className="text-button primary"
+                        type="button"
+                        onClick={() => addMaterial(selectedProject)}
+                      >
+                        <Plus size={16} />
+                        Новый документ
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            </section>
           </>
         ) : (
           <div className="empty-state">
