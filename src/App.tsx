@@ -167,24 +167,9 @@ export function App() {
   }, []);
 
   const selectedProject = projects.find((project) => project.id === selectedId) ?? projects[0];
-  const selectedMaterial = selectedProject?.materials.find(
-    (material) => material.id === selectedMaterialId,
-  );
-
-  useEffect(() => {
-    if (!selectedProject?.materials.length) {
-      setSelectedMaterialId("");
-      return;
-    }
-
-    const hasSelectedMaterial = selectedProject.materials.some(
-      (material) => material.id === selectedMaterialId,
-    );
-
-    if (!hasSelectedMaterial) {
-      setSelectedMaterialId(selectedProject.materials[0].id);
-    }
-  }, [selectedProject?.id, selectedProject?.materials, selectedMaterialId]);
+  const selectedMaterial =
+    selectedProject?.materials.find((material) => material.id === selectedMaterialId) ??
+    selectedProject?.materials[0];
 
   const filteredProjects = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -652,7 +637,6 @@ export function App() {
                       </div>
                       <MaterialEditor
                         key={selectedMaterial.id}
-                        materialId={selectedMaterial.id}
                         markdown={selectedMaterial.markdown}
                         onChange={(markdown) =>
                           updateMaterialMarkdown(selectedProject, selectedMaterial.id, markdown)

@@ -19,27 +19,18 @@ import {
 import { useEffect, useRef } from "react";
 
 type MaterialEditorProps = {
-  materialId: string;
   markdown: string;
   onChange: (markdown: string) => void;
 };
 
-export function MaterialEditor({ materialId, markdown, onChange }: MaterialEditorProps) {
+export function MaterialEditor({ markdown, onChange }: MaterialEditorProps) {
   const editorRef = useRef<MDXEditorMethods>(null);
-  const isApplyingMarkdownRef = useRef(false);
 
   useEffect(() => {
-    const editor = editorRef.current;
-
-    if (editor && editor.getMarkdown() !== markdown) {
-      isApplyingMarkdownRef.current = true;
-      editor.setMarkdown(markdown);
-
-      window.requestAnimationFrame(() => {
-        isApplyingMarkdownRef.current = false;
-      });
+    if (editorRef.current && editorRef.current.getMarkdown() !== markdown) {
+      editorRef.current.setMarkdown(markdown);
     }
-  }, [materialId, markdown]);
+  }, [markdown]);
 
   return (
     <MDXEditor
@@ -48,7 +39,7 @@ export function MaterialEditor({ materialId, markdown, onChange }: MaterialEdito
       contentEditableClassName="material-editor-surface"
       markdown={markdown}
       onChange={(nextMarkdown, initialMarkdownNormalize) => {
-        if (!initialMarkdownNormalize && !isApplyingMarkdownRef.current) {
+        if (!initialMarkdownNormalize) {
           onChange(nextMarkdown);
         }
       }}
