@@ -575,24 +575,6 @@ h3 {
   box-shadow: 0 0 0 3px rgba(70, 114, 102, 0.14);
 }
 
-.material-markdown-textarea {
-  width: 100%;
-  min-height: 360px;
-  resize: vertical;
-  border: 1px solid #d7ddd3;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #1f2933;
-  font: 0.98rem/1.65 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  outline: 0;
-  padding: 18px 20px;
-}
-
-.material-markdown-textarea:focus {
-  border-color: #467266;
-  box-shadow: 0 0 0 3px rgba(70, 114, 102, 0.14);
-}
-
 .material-mdx-editor {
   overflow: hidden;
   border: 1px solid #d7ddd3;
