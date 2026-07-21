@@ -636,6 +636,7 @@ export function App() {
                         </button>
                       </div>
                       <MaterialEditor
+                        key={selectedMaterial.id}
                         markdown={selectedMaterial.markdown}
                         onChange={(markdown) =>
                           updateMaterialMarkdown(selectedProject, selectedMaterial.id, markdown)
