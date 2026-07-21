@@ -5,7 +5,6 @@ import {
   InsertThematicBreak,
   ListsToggle,
   MDXEditor,
-  MDXEditorMethods,
   UndoRedo,
   headingsPlugin,
   linkDialogPlugin,
@@ -16,7 +15,6 @@ import {
   thematicBreakPlugin,
   toolbarPlugin,
 } from "@mdxeditor/editor";
-import { useEffect, useRef } from "react";
 
 type MaterialEditorProps = {
   markdown: string;
@@ -24,25 +22,12 @@ type MaterialEditorProps = {
 };
 
 export function MaterialEditor({ markdown, onChange }: MaterialEditorProps) {
-  const editorRef = useRef<MDXEditorMethods>(null);
-
-  useEffect(() => {
-    if (editorRef.current && editorRef.current.getMarkdown() !== markdown) {
-      editorRef.current.setMarkdown(markdown);
-    }
-  }, [markdown]);
-
   return (
     <MDXEditor
-      ref={editorRef}
       className="material-mdx-editor"
       contentEditableClassName="material-editor-surface"
       markdown={markdown}
-      onChange={(nextMarkdown, initialMarkdownNormalize) => {
-        if (!initialMarkdownNormalize) {
-          onChange(nextMarkdown);
-        }
-      }}
+      onChange={onChange}
       plugins={[
         headingsPlugin(),
         listsPlugin(),
