@@ -158,47 +158,58 @@ function getErrorMessage(error: unknown) {
   }
 }
 
+type AuthMode = "sign-in" | "sign-up" | "reset-password";
+
 function AuthPanel() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
+  const [mode, setMode] = useState<AuthMode>("sign-in");
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function handleAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!supabase || !email.trim() || !password) {
+    if (!supabase || !email.trim() || (mode !== "reset-password" && !password)) {
       return;
     }
 
     setIsSubmitting(true);
     setMessage("");
 
-    const credentials = {
-      email: email.trim(),
-      password,
-    };
+    const { error } = await (async () => {
+      if (mode === "reset-password") {
+        return supabase.auth.resetPasswordForEmail(email.trim(), {
+          redirectTo: window.location.origin,
+        });
+      }
 
-    const { error } =
-      mode === "sign-in"
-        ? await supabase.auth.signInWithPassword(credentials)
-        : await supabase.auth.signUp(credentials);
+      const credentials = {
+        email: email.trim(),
+        password,
+      };
+
+      return mode === "sign-in"
+        ? supabase.auth.signInWithPassword(credentials)
+        : supabase.auth.signUp(credentials);
+    })();
 
     setIsSubmitting(false);
 
     if (error) {
       const errorMessage = getErrorMessage(error);
       setMessage(
-        errorMessage ? `Не удалось выполнить вход: ${errorMessage}` : "Не удалось выполнить вход.",
+        errorMessage ? `Не удалось выполнить действие: ${errorMessage}` : "Не удалось выполнить действие.",
       );
       return;
     }
 
     setMessage(
-      mode === "sign-in"
-        ? "Вход выполнен."
-        : "Аккаунт создан. Если Supabase требует подтверждение email, проверь почту.",
+      mode === "reset-password"
+        ? "Проверь почту и открой ссылку сброса пароля."
+        : mode === "sign-in"
+          ? "Вход выполнен."
+          : "Аккаунт создан. Если Supabase требует подтверждение email, проверь почту.",
     );
   }
 
@@ -206,11 +217,19 @@ function AuthPanel() {
     <main className="auth-shell">
       <form className="auth-panel" onSubmit={handleAuth}>
         <p className="eyebrow">Loom</p>
-        <h1>{mode === "sign-in" ? "Вход" : "Регистрация"}</h1>
+        <h1>
+          {mode === "reset-password"
+            ? "Сброс пароля"
+            : mode === "sign-in"
+              ? "Вход"
+              : "Регистрация"}
+        </h1>
         <p>
-          {mode === "sign-in"
-            ? "Войди с email и паролем."
-            : "Создай аккаунт с email и паролем."}
+          {mode === "reset-password"
+            ? "Укажи email, и Supabase отправит ссылку для установки нового пароля."
+            : mode === "sign-in"
+              ? "Войди с email и паролем."
+              : "Создай аккаунт с email и паролем."}
         </p>
 
         <label>
@@ -224,20 +243,28 @@ function AuthPanel() {
           />
         </label>
 
-        <label>
-          Пароль
-          <input
-            required
-            minLength={6}
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder="Минимум 6 символов"
-          />
-        </label>
+        {mode !== "reset-password" ? (
+          <label>
+            Пароль
+            <input
+              required
+              minLength={6}
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Минимум 6 символов"
+            />
+          </label>
+        ) : null}
 
         <button className="text-button primary" type="submit" disabled={isSubmitting}>
-          {isSubmitting ? "Проверяем..." : mode === "sign-in" ? "Войти" : "Создать аккаунт"}
+          {isSubmitting
+            ? "Проверяем..."
+            : mode === "reset-password"
+              ? "Отправить ссылку"
+              : mode === "sign-in"
+                ? "Войти"
+                : "Создать аккаунт"}
         </button>
 
         <button
@@ -249,6 +276,85 @@ function AuthPanel() {
           }}
         >
           {mode === "sign-in" ? "Создать аккаунт" : "Уже есть аккаунт"}
+        </button>
+
+        {mode !== "reset-password" ? (
+          <button
+            className="text-button"
+            type="button"
+            onClick={() => {
+              setMode("reset-password");
+              setPassword("");
+              setMessage("");
+            }}
+          >
+            Сбросить пароль
+          </button>
+        ) : null}
+
+        {message ? <p className="auth-message">{message}</p> : null}
+      </form>
+    </main>
+  );
+}
+
+type PasswordRecoveryPanelProps = {
+  onComplete: () => void;
+};
+
+function PasswordRecoveryPanel({ onComplete }: PasswordRecoveryPanelProps) {
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  async function handleUpdatePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!supabase || !password) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    setMessage("");
+
+    const { error } = await supabase.auth.updateUser({ password });
+
+    setIsSubmitting(false);
+
+    if (error) {
+      const errorMessage = getErrorMessage(error);
+      setMessage(
+        errorMessage ? `Не удалось обновить пароль: ${errorMessage}` : "Не удалось обновить пароль.",
+      );
+      return;
+    }
+
+    setPassword("");
+    setMessage("Пароль обновлен.");
+    onComplete();
+  }
+
+  return (
+    <main className="auth-shell">
+      <form className="auth-panel" onSubmit={handleUpdatePassword}>
+        <p className="eyebrow">Loom</p>
+        <h1>Новый пароль</h1>
+        <p>Задай новый пароль для текущего аккаунта.</p>
+
+        <label>
+          Новый пароль
+          <input
+            required
+            minLength={6}
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="Минимум 6 символов"
+          />
+        </label>
+
+        <button className="text-button primary" type="submit" disabled={isSubmitting}>
+          {isSubmitting ? "Сохраняем..." : "Сохранить пароль"}
         </button>
 
         {message ? <p className="auth-message">{message}</p> : null}
@@ -274,6 +380,7 @@ export function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(isSupabaseConfigured);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
 
   useEffect(() => {
     latestProjectsRef.current = projects;
@@ -298,7 +405,11 @@ export function App() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setIsPasswordRecovery(true);
+      }
+
       setSession(nextSession);
     });
 
@@ -641,6 +752,10 @@ export function App() {
 
   if (isSupabaseConfigured && !session) {
     return <AuthPanel />;
+  }
+
+  if (isSupabaseConfigured && isPasswordRecovery) {
+    return <PasswordRecoveryPanel onComplete={() => setIsPasswordRecovery(false)} />;
   }
 
   return (
