@@ -160,42 +160,58 @@ function getErrorMessage(error: unknown) {
 
 function AuthPanel() {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  async function handleSignIn(event: FormEvent<HTMLFormElement>) {
+  async function handleAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!supabase || !email.trim()) {
+    if (!supabase || !email.trim() || !password) {
       return;
     }
 
     setIsSubmitting(true);
     setMessage("");
 
-    const { error } = await supabase.auth.signInWithOtp({
+    const credentials = {
       email: email.trim(),
-      options: {
-        emailRedirectTo: window.location.origin,
-      },
-    });
+      password,
+    };
+
+    const { error } =
+      mode === "sign-in"
+        ? await supabase.auth.signInWithPassword(credentials)
+        : await supabase.auth.signUp(credentials);
 
     setIsSubmitting(false);
 
     if (error) {
-      setMessage("Не удалось отправить ссылку входа.");
+      const errorMessage = getErrorMessage(error);
+      setMessage(
+        errorMessage ? `Не удалось выполнить вход: ${errorMessage}` : "Не удалось выполнить вход.",
+      );
       return;
     }
 
-    setMessage("Проверь почту и открой ссылку входа.");
+    setMessage(
+      mode === "sign-in"
+        ? "Вход выполнен."
+        : "Аккаунт создан. Если Supabase требует подтверждение email, проверь почту.",
+    );
   }
 
   return (
     <main className="auth-shell">
-      <form className="auth-panel" onSubmit={handleSignIn}>
+      <form className="auth-panel" onSubmit={handleAuth}>
         <p className="eyebrow">Loom</p>
-        <h1>Вход</h1>
-        <p>Укажи email. Supabase отправит ссылку для входа без пароля.</p>
+        <h1>{mode === "sign-in" ? "Вход" : "Регистрация"}</h1>
+        <p>
+          {mode === "sign-in"
+            ? "Войди с email и паролем."
+            : "Создай аккаунт с email и паролем."}
+        </p>
 
         <label>
           Email
@@ -208,8 +224,31 @@ function AuthPanel() {
           />
         </label>
 
+        <label>
+          Пароль
+          <input
+            required
+            minLength={6}
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="Минимум 6 символов"
+          />
+        </label>
+
         <button className="text-button primary" type="submit" disabled={isSubmitting}>
-          {isSubmitting ? "Отправляем..." : "Получить ссылку"}
+          {isSubmitting ? "Проверяем..." : mode === "sign-in" ? "Войти" : "Создать аккаунт"}
+        </button>
+
+        <button
+          className="text-button"
+          type="button"
+          onClick={() => {
+            setMode(mode === "sign-in" ? "sign-up" : "sign-in");
+            setMessage("");
+          }}
+        >
+          {mode === "sign-in" ? "Создать аккаунт" : "Уже есть аккаунт"}
         </button>
 
         {message ? <p className="auth-message">{message}</p> : null}
