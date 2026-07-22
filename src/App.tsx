@@ -142,6 +142,18 @@ function isOverdue(project: Project) {
   return new Date(`${project.dueDate}T00:00:00`) < today;
 }
 
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === "object" && "message" in error) {
+    return String((error as { message: unknown }).message);
+  }
+
+  return "";
+}
+
 function AuthPanel() {
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState("");
@@ -327,8 +339,9 @@ export function App() {
       setSaveStatus("saved");
     } catch (error) {
       console.error(error);
+      const errorMessage = getErrorMessage(error);
       setStorageError(
-        error instanceof Error ? `Не удалось сохранить данные: ${error.message}` : "Не удалось сохранить данные.",
+        errorMessage ? `Не удалось сохранить данные: ${errorMessage}` : "Не удалось сохранить данные.",
       );
       setSaveStatus("error");
 

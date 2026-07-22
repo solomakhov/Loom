@@ -500,7 +500,6 @@ async function saveProjectChildren(projects: Project[], userId: string) {
 
   await deleteRowsForProjects("project_tags", projectIds);
   await deleteRowsForProjects("material_links", projectIds);
-  await deleteRowsForProjects("project_tasks", projectIds);
 
   if (tagRows.length) {
     const { error } = await supabase.from("project_tags").insert(tagRows);
@@ -511,12 +510,16 @@ async function saveProjectChildren(projects: Project[], userId: string) {
   }
 
   if (taskRows.length) {
-    const { error } = await supabase.from("project_tasks").insert(taskRows);
+    const { error } = await supabase
+      .from("project_tasks")
+      .upsert(taskRows, { onConflict: "id" });
 
     if (error) {
       throw error;
     }
   }
+
+  await deleteMissingRows("project_tasks", "id", taskRows.map((task) => task.id), projectIds);
 
   if (materialRows.length) {
     const { error } = await supabase
@@ -546,6 +549,29 @@ async function deleteRowsForProjects(tableName: string, projectIds: string[]) {
   }
 
   const { error } = await supabase.from(tableName).delete().in("project_id", projectIds);
+
+  if (error) {
+    throw error;
+  }
+}
+
+async function deleteMissingRows(
+  tableName: string,
+  idColumn: string,
+  currentIds: string[],
+  projectIds: string[],
+) {
+  if (!supabase || !projectIds.length) {
+    return;
+  }
+
+  let query = supabase.from(tableName).delete().in("project_id", projectIds);
+
+  if (currentIds.length) {
+    query = query.not(idColumn, "in", `(${currentIds.join(",")})`);
+  }
+
+  const { error } = await query;
 
   if (error) {
     throw error;
