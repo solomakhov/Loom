@@ -151,7 +151,11 @@ function getErrorMessage(error: unknown) {
     return String((error as { message: unknown }).message);
   }
 
-  return "";
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
 }
 
 function AuthPanel() {

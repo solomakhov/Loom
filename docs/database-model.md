@@ -27,6 +27,7 @@ Current migration:
 
 ```text
 202607220001_normalize_project_data.sql
+202607220002_project_title_compatibility.sql
 ```
 
 Apply migrations manually through Supabase SQL Editor for now. Later, this can be moved to Supabase CLI.
@@ -153,6 +154,12 @@ The first normalization migration:
 5. Creates `project_tags`, `project_tasks`, `materials`, and `material_links`.
 6. Migrates nested JSON tasks/materials/tags into those tables.
 7. Keeps `projects.data` for rollback/compatibility during the frontend transition.
+
+The second compatibility migration:
+
+1. Backfills missing project titles.
+2. Sets a safe default for `projects.title`.
+3. Adds a trigger that fills relational project columns from legacy `projects.data` when an older client sends only JSON data.
 
 ## Frontend Transition Status
 

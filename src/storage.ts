@@ -50,6 +50,7 @@ type MaterialLinkRow = {
 };
 
 let loadedMaterialIds = new Set<string>();
+let loadedProjectIds = new Set<string>();
 
 function emptyToNull(value: string) {
   return value.trim() || null;
@@ -367,6 +368,7 @@ export async function loadProjects(): Promise<Project[]> {
   }
 
   loadedMaterialIds = new Set((materialRows ?? []).map((material) => material.id));
+  loadedProjectIds = new Set(projects.map((project) => project.id));
 
   return projects.map((project) =>
     buildProjectFromRows(
@@ -391,7 +393,7 @@ export async function saveProjects(projects: Project[]) {
   const projectRows = normalizedProjects.map((project) => ({
     id: project.id,
     user_id: userId,
-    title: project.title,
+    title: project.title.trim() || "Untitled project",
     description: project.description,
     status: project.status,
     priority: project.priority,
@@ -412,17 +414,24 @@ export async function saveProjects(projects: Project[]) {
       throw error;
     }
 
-    const ids = projectRows.map((row) => row.id).join(",");
-    const { error: deleteError } = await supabase
-      .from(SUPABASE_PROJECTS_TABLE)
-      .delete()
-      .not("id", "in", `(${ids})`);
+    const currentProjectIds = new Set(projectRows.map((row) => row.id));
+    const removedProjectIds = Array.from(loadedProjectIds).filter(
+      (projectId) => !currentProjectIds.has(projectId),
+    );
 
-    if (deleteError) {
-      throw deleteError;
+    if (removedProjectIds.length) {
+      const { error: deleteError } = await supabase
+        .from(SUPABASE_PROJECTS_TABLE)
+        .delete()
+        .in("id", removedProjectIds);
+
+      if (deleteError) {
+        throw deleteError;
+      }
     }
 
     await saveProjectChildren(normalizedProjects, userId);
+    loadedProjectIds = currentProjectIds;
     return;
   }
 
@@ -437,6 +446,8 @@ export async function saveProjects(projects: Project[]) {
   if (error) {
     throw error;
   }
+
+  loadedProjectIds = new Set();
 }
 
 async function saveProjectChildren(projects: Project[], userId: string) {
@@ -565,13 +576,26 @@ async function deleteMissingRows(
     return;
   }
 
-  let query = supabase.from(tableName).delete().in("project_id", projectIds);
+  const { data, error: selectError } = await supabase
+    .from(tableName)
+    .select(idColumn)
+    .in("project_id", projectIds);
 
-  if (currentIds.length) {
-    query = query.not(idColumn, "in", `(${currentIds.join(",")})`);
+  if (selectError) {
+    throw selectError;
   }
 
-  const { error } = await query;
+  const rows = (data ?? []) as unknown as Record<string, string>[];
+  const currentIdSet = new Set(currentIds);
+  const removedIds = rows
+    .map((row) => row[idColumn])
+    .filter((id) => id && !currentIdSet.has(id));
+
+  if (!removedIds.length) {
+    return;
+  }
+
+  const { error } = await supabase.from(tableName).delete().in(idColumn, removedIds);
 
   if (error) {
     throw error;
