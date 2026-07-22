@@ -9,6 +9,10 @@ type ProjectRow = {
   data: Project;
 };
 
+function emptyToNull(value: string) {
+  return value.trim() || null;
+}
+
 const seedProjects: Project[] = [
   {
     id: "loom-mvp",
@@ -151,6 +155,21 @@ function loadProjectsFromLocalStorage(): Project[] {
   }
 }
 
+function loadExistingProjectsFromLocalStorage(): Project[] | null {
+  const raw = window.localStorage.getItem(STORAGE_KEY);
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const projects = JSON.parse(raw);
+    return Array.isArray(projects) ? projects.map(normalizeProject) : null;
+  } catch {
+    return null;
+  }
+}
+
 function saveProjectsToLocalStorage(projects: Project[]) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
 }
@@ -172,9 +191,14 @@ export async function loadProjects(): Promise<Project[]> {
   const rows = (data ?? []) as ProjectRow[];
 
   if (!rows.length) {
-    const localProjects = loadProjectsFromLocalStorage();
-    await saveProjects(localProjects);
-    return localProjects;
+    const localProjects = loadExistingProjectsFromLocalStorage();
+
+    if (localProjects?.length) {
+      await saveProjects(localProjects);
+      return localProjects;
+    }
+
+    return [];
   }
 
   return rows.map((row) => normalizeProject(row.data));
@@ -189,7 +213,15 @@ export async function saveProjects(projects: Project[]) {
 
   const rows = projects.map((project) => ({
     id: project.id,
+    title: project.title,
+    description: project.description,
+    status: project.status,
+    priority: project.priority,
+    start_date: emptyToNull(project.startDate),
+    due_date: emptyToNull(project.dueDate),
+    icon: project.icon,
     data: normalizeProject(project),
+    created_at: project.createdAt,
     updated_at: project.updatedAt,
   }));
 
