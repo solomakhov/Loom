@@ -1,13 +1,55 @@
 import { supabase } from "./supabase";
-import { Project } from "./types";
+import { Project, ProjectPriority, ProjectStatus, ProjectTask } from "./types";
 
 const STORAGE_KEY = "loom.projects.v1";
 const SUPABASE_PROJECTS_TABLE = "projects";
 const EMPTY_PROJECT_ID = "__empty__";
 
 type ProjectRow = {
-  data: Project;
+  id: string;
+  title: string | null;
+  description: string | null;
+  status: ProjectStatus | null;
+  priority: ProjectPriority | null;
+  start_date: string | null;
+  due_date: string | null;
+  icon: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  data?: Project | null;
 };
+
+type ProjectTagRow = {
+  project_id: string;
+  tag: string;
+};
+
+type ProjectTaskRow = {
+  id: string;
+  project_id: string;
+  parent_task_id: string | null;
+  title: string;
+  done: boolean;
+  position: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type MaterialRow = {
+  id: string;
+  title: string;
+  markdown: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type MaterialLinkRow = {
+  material_id: string;
+  project_id: string | null;
+  task_id: string | null;
+};
+
+let loadedMaterialIds = new Set<string>();
 
 function emptyToNull(value: string) {
   return value.trim() || null;
@@ -129,7 +171,12 @@ function calculateProgress(project: Project) {
 function normalizeProject(project: Project): Project {
   const normalizedProject = {
     ...project,
-    tasks: Array.isArray(project.tasks) ? project.tasks : [],
+    tasks: Array.isArray(project.tasks)
+      ? project.tasks.map((task, index) => ({
+          ...task,
+          position: task.position ?? index,
+        }))
+      : [],
     materials: Array.isArray(project.materials) ? project.materials : [],
   };
 
@@ -137,6 +184,73 @@ function normalizeProject(project: Project): Project {
     ...normalizedProject,
     progress: calculateProgress(normalizedProject),
   };
+}
+
+function dateFromDb(value: string | null) {
+  return value ?? "";
+}
+
+function timestampFromDb(value: string | null) {
+  return value ?? new Date().toISOString();
+}
+
+function buildProjectFromRows(
+  projectRow: ProjectRow,
+  tagRows: ProjectTagRow[],
+  taskRows: ProjectTaskRow[],
+  materialRows: MaterialRow[],
+  materialLinkRows: MaterialLinkRow[],
+): Project {
+  const projectMaterials = materialLinkRows
+    .filter((link) => link.project_id === projectRow.id)
+    .map((link) => materialRows.find((material) => material.id === link.material_id))
+    .filter((material): material is MaterialRow => Boolean(material))
+    .map((material) => ({
+      id: material.id,
+      title: material.title,
+      markdown: material.markdown,
+      createdAt: material.created_at,
+      updatedAt: material.updated_at,
+    }));
+
+  const tasks: ProjectTask[] = taskRows
+    .filter((task) => task.project_id === projectRow.id)
+    .sort((a, b) => {
+      const parentCompare = (a.parent_task_id ?? "").localeCompare(b.parent_task_id ?? "");
+      return parentCompare || a.position - b.position;
+    })
+    .map((task) => ({
+      id: task.id,
+      title: task.title,
+      done: task.done,
+      parentTaskId: task.parent_task_id ?? undefined,
+      position: task.position,
+      createdAt: task.created_at,
+      updatedAt: task.updated_at,
+    }));
+
+  return normalizeProject({
+    id: projectRow.id,
+    title: projectRow.title ?? projectRow.data?.title ?? "Untitled project",
+    description: projectRow.description ?? projectRow.data?.description ?? "",
+    status: projectRow.status ?? projectRow.data?.status ?? "active",
+    priority: projectRow.priority ?? projectRow.data?.priority ?? "medium",
+    startDate: dateFromDb(projectRow.start_date) || projectRow.data?.startDate || "",
+    dueDate: dateFromDb(projectRow.due_date) || projectRow.data?.dueDate || "",
+    tags: tagRows
+      .filter((tag) => tag.project_id === projectRow.id)
+      .map((tag) => tag.tag),
+    icon: projectRow.icon ?? projectRow.data?.icon ?? "L",
+    progress: 0,
+    tasks,
+    materials: projectMaterials,
+    createdAt: timestampFromDb(projectRow.created_at) || projectRow.data?.createdAt || new Date().toISOString(),
+    updatedAt: timestampFromDb(projectRow.updated_at) || projectRow.data?.updatedAt || new Date().toISOString(),
+  });
+}
+
+function uniqueById<T extends { id: string }>(items: T[]) {
+  return Array.from(new Map(items.map((item) => [item.id, item])).values());
 }
 
 function loadProjectsFromLocalStorage(): Project[] {
@@ -179,18 +293,18 @@ export async function loadProjects(): Promise<Project[]> {
     return loadProjectsFromLocalStorage();
   }
 
-  const { data, error } = await supabase
+  const { data: projectRows, error: projectsError } = await supabase
     .from(SUPABASE_PROJECTS_TABLE)
-    .select("data")
+    .select("id,title,description,status,priority,start_date,due_date,icon,created_at,updated_at,data")
     .order("updated_at", { ascending: false });
 
-  if (error) {
-    throw error;
+  if (projectsError) {
+    throw projectsError;
   }
 
-  const rows = (data ?? []) as ProjectRow[];
+  const projects = (projectRows ?? []) as ProjectRow[];
 
-  if (!rows.length) {
+  if (!projects.length) {
     const localProjects = loadExistingProjectsFromLocalStorage();
 
     if (localProjects?.length) {
@@ -201,7 +315,47 @@ export async function loadProjects(): Promise<Project[]> {
     return [];
   }
 
-  return rows.map((row) => normalizeProject(row.data));
+  const [
+    { data: tagRows, error: tagsError },
+    { data: taskRows, error: tasksError },
+    { data: materialRows, error: materialsError },
+    { data: materialLinkRows, error: materialLinksError },
+  ] = await Promise.all([
+    supabase.from("project_tags").select("project_id,tag"),
+    supabase
+      .from("project_tasks")
+      .select("id,project_id,parent_task_id,title,done,position,created_at,updated_at"),
+    supabase.from("materials").select("id,title,markdown,created_at,updated_at"),
+    supabase.from("material_links").select("material_id,project_id,task_id"),
+  ]);
+
+  if (tagsError) {
+    throw tagsError;
+  }
+
+  if (tasksError) {
+    throw tasksError;
+  }
+
+  if (materialsError) {
+    throw materialsError;
+  }
+
+  if (materialLinksError) {
+    throw materialLinksError;
+  }
+
+  loadedMaterialIds = new Set((materialRows ?? []).map((material) => material.id));
+
+  return projects.map((project) =>
+    buildProjectFromRows(
+      project,
+      (tagRows ?? []) as ProjectTagRow[],
+      (taskRows ?? []) as ProjectTaskRow[],
+      (materialRows ?? []) as MaterialRow[],
+      (materialLinkRows ?? []) as MaterialLinkRow[],
+    ),
+  );
 }
 
 export async function saveProjects(projects: Project[]) {
@@ -211,7 +365,8 @@ export async function saveProjects(projects: Project[]) {
     return;
   }
 
-  const rows = projects.map((project) => ({
+  const normalizedProjects = projects.map(normalizeProject);
+  const projectRows = normalizedProjects.map((project) => ({
     id: project.id,
     title: project.title,
     description: project.description,
@@ -225,16 +380,16 @@ export async function saveProjects(projects: Project[]) {
     updated_at: project.updatedAt,
   }));
 
-  if (rows.length) {
+  if (projectRows.length) {
     const { error } = await supabase
       .from(SUPABASE_PROJECTS_TABLE)
-      .upsert(rows, { onConflict: "id" });
+      .upsert(projectRows, { onConflict: "id" });
 
     if (error) {
       throw error;
     }
 
-    const ids = rows.map((row) => row.id).join(",");
+    const ids = projectRows.map((row) => row.id).join(",");
     const { error: deleteError } = await supabase
       .from(SUPABASE_PROJECTS_TABLE)
       .delete()
@@ -244,13 +399,146 @@ export async function saveProjects(projects: Project[]) {
       throw deleteError;
     }
 
+    await saveProjectChildren(normalizedProjects);
     return;
   }
+
+  const currentMaterialIds = new Set<string>();
+  await deleteLoadedMissingMaterials(currentMaterialIds);
 
   const { error } = await supabase
     .from(SUPABASE_PROJECTS_TABLE)
     .delete()
     .neq("id", EMPTY_PROJECT_ID);
+
+  if (error) {
+    throw error;
+  }
+}
+
+async function saveProjectChildren(projects: Project[]) {
+  if (!supabase) {
+    return;
+  }
+
+  const projectIds = projects.map((project) => project.id);
+
+  if (!projectIds.length) {
+    return;
+  }
+
+  const tagRows = projects.flatMap((project) =>
+    project.tags.map((tag) => ({
+      project_id: project.id,
+      tag,
+    })),
+  );
+
+  const taskRows = projects
+    .flatMap((project) =>
+      project.tasks.map((task, index) => ({
+        id: task.id,
+        project_id: project.id,
+        parent_task_id: task.parentTaskId ?? null,
+        title: task.title,
+        done: task.done,
+        position: task.position ?? index,
+        created_at: task.createdAt,
+        updated_at: task.updatedAt,
+      })),
+    )
+    .sort((a, b) => Number(Boolean(a.parent_task_id)) - Number(Boolean(b.parent_task_id)));
+
+  const materialRows = uniqueById(
+    projects.flatMap((project) =>
+      project.materials.map((material) => ({
+        id: material.id,
+        title: material.title,
+        markdown: material.markdown,
+        created_at: material.createdAt,
+        updated_at: material.updatedAt,
+      })),
+    ),
+  );
+
+  const materialLinkRows = projects.flatMap((project) =>
+    project.materials.map((material) => ({
+      material_id: material.id,
+      project_id: project.id,
+      task_id: null,
+    })),
+  );
+
+  const currentMaterialIds = new Set(materialRows.map((material) => material.id));
+
+  await deleteRowsForProjects("project_tags", projectIds);
+  await deleteRowsForProjects("material_links", projectIds);
+  await deleteRowsForProjects("project_tasks", projectIds);
+
+  if (tagRows.length) {
+    const { error } = await supabase.from("project_tags").insert(tagRows);
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  if (taskRows.length) {
+    const { error } = await supabase.from("project_tasks").insert(taskRows);
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  if (materialRows.length) {
+    const { error } = await supabase
+      .from("materials")
+      .upsert(materialRows, { onConflict: "id" });
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  if (materialLinkRows.length) {
+    const { error } = await supabase.from("material_links").insert(materialLinkRows);
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  await deleteLoadedMissingMaterials(currentMaterialIds);
+  loadedMaterialIds = currentMaterialIds;
+}
+
+async function deleteRowsForProjects(tableName: string, projectIds: string[]) {
+  if (!supabase || !projectIds.length) {
+    return;
+  }
+
+  const { error } = await supabase.from(tableName).delete().in("project_id", projectIds);
+
+  if (error) {
+    throw error;
+  }
+}
+
+async function deleteLoadedMissingMaterials(currentMaterialIds: Set<string>) {
+  if (!supabase || !loadedMaterialIds.size) {
+    return;
+  }
+
+  const removedMaterialIds = Array.from(loadedMaterialIds).filter(
+    (materialId) => !currentMaterialIds.has(materialId),
+  );
+
+  if (!removedMaterialIds.length) {
+    return;
+  }
+
+  const { error } = await supabase.from("materials").delete().in("id", removedMaterialIds);
 
   if (error) {
     throw error;

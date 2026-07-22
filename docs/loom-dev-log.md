@@ -46,6 +46,12 @@ After changing environment variables in Vercel, redeploy the project.
 
 The database schema is stored in `supabase-schema.sql`.
 
+Note: `supabase-schema.sql` is now deprecated. Use versioned migrations in:
+
+```text
+supabase/migrations/
+```
+
 Current table:
 
 ```text
@@ -56,15 +62,19 @@ projects
   updated_at timestamptz
 ```
 
-One row in `projects` equals one Loom project. Tasks and materials are currently nested inside the `data` JSON field.
+The initial MVP stored one row in `projects` per Loom project and nested tasks/materials inside `data`.
 
-This is intentional for MVP speed. Later, if the app needs stronger search, collaboration, or partial updates, the likely next schema is:
+The project is now moving to normalized tables:
 
 ```text
 projects
+project_tags
 project_tasks
-project_materials
+materials
+material_links
 ```
+
+`projects.data` remains as a legacy backup during the transition.
 
 ## Row Level Security
 

@@ -52,7 +52,7 @@ Important columns:
 - `updated_at`
 - `data`
 
-`data` remains temporarily as a legacy backup during migration from the JSONB model. The frontend can continue working while normalized tables are introduced.
+`data` remains temporarily as a legacy backup during migration from the JSONB model. The frontend now reads and writes normalized tables, while still writing `data` for compatibility during the transition.
 
 ### `project_tags`
 
@@ -154,22 +154,25 @@ The first normalization migration:
 6. Migrates nested JSON tasks/materials/tags into those tables.
 7. Keeps `projects.data` for rollback/compatibility during the frontend transition.
 
-## Frontend Transition Plan
+## Frontend Transition Status
 
-The current frontend can keep using the legacy JSON storage while the schema exists.
+The frontend storage layer now:
+
+1. Reads projects from normalized `projects` columns.
+2. Reads tags from `project_tags`.
+3. Reads tasks from `project_tasks`.
+4. Reads materials from `materials`.
+5. Reads project-material relationships from `material_links`.
+6. Writes updates back into those normalized tables.
+7. Still writes `projects.data` as a legacy backup.
 
 Next implementation steps:
 
-1. Update TypeScript types:
-   - `ProjectTask.parentTaskId`
-   - `ProjectTask.position`
-   - material links model
-2. Replace full-project JSON upserts with table-specific queries.
-3. Load projects with related tasks/tags/material links.
-4. Implement nested task rendering.
-5. Implement task reordering.
-6. Implement material link/unlink UI.
-7. Remove dependency on `projects.data` after production data is verified.
+1. Render nested tasks using `ProjectTask.parentTaskId`.
+2. Add task reordering using `ProjectTask.position`.
+3. Add material link/unlink UI.
+4. Add free-material view.
+5. Remove dependency on `projects.data` after production data is verified.
 
 ## Operational Rule
 

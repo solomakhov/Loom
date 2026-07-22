@@ -7,6 +7,8 @@ create table if not exists public.schema_migrations (
   applied_at timestamptz not null default now()
 );
 
+alter table public.schema_migrations enable row level security;
+
 create table if not exists public.projects (
   id text primary key,
   user_id uuid not null default auth.uid(),

@@ -5,6 +5,8 @@ export type ProjectTask = {
   id: string;
   title: string;
   done: boolean;
+  parentTaskId?: string;
+  position?: number;
   createdAt: string;
   updatedAt: string;
 };
