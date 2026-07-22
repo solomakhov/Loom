@@ -54,6 +54,7 @@ const emptyDraft: ProjectDraft = {
 };
 
 type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
+const PASSWORD_RECOVERY_REQUESTED_KEY = "loom.passwordRecoveryRequested";
 
 function getSaveStatusLabel(status: SaveStatus) {
   switch (status) {
@@ -169,6 +170,18 @@ function isRecoveryUrl() {
   );
 }
 
+function isPasswordRecoveryRequested() {
+  return window.localStorage.getItem(PASSWORD_RECOVERY_REQUESTED_KEY) === "true";
+}
+
+function setPasswordRecoveryRequested() {
+  window.localStorage.setItem(PASSWORD_RECOVERY_REQUESTED_KEY, "true");
+}
+
+function clearPasswordRecoveryRequested() {
+  window.localStorage.removeItem(PASSWORD_RECOVERY_REQUESTED_KEY);
+}
+
 type AuthMode = "sign-in" | "sign-up" | "reset-password";
 
 function AuthPanel() {
@@ -222,6 +235,12 @@ function AuthPanel() {
           ? "Вход выполнен."
           : "Аккаунт создан. Если Supabase требует подтверждение email, проверь почту.",
     );
+
+    if (mode === "reset-password") {
+      setPasswordRecoveryRequested();
+    } else {
+      clearPasswordRecoveryRequested();
+    }
   }
 
   return (
@@ -343,6 +362,7 @@ function PasswordRecoveryPanel({ onComplete }: PasswordRecoveryPanelProps) {
     setPassword("");
     setMessage("Пароль обновлен.");
     window.history.replaceState({}, document.title, window.location.origin);
+    clearPasswordRecoveryRequested();
     onComplete();
   }
 
@@ -392,7 +412,9 @@ export function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(isSupabaseConfigured);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const [isPasswordRecovery, setIsPasswordRecovery] = useState(() => isRecoveryUrl());
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(
+    () => isRecoveryUrl() || isPasswordRecoveryRequested(),
+  );
 
   useEffect(() => {
     latestProjectsRef.current = projects;
@@ -411,7 +433,7 @@ export function App() {
         return;
       }
 
-      if (isRecoveryUrl()) {
+      if (data.session && (isRecoveryUrl() || isPasswordRecoveryRequested())) {
         setIsPasswordRecovery(true);
       }
 
@@ -423,6 +445,11 @@ export function App() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (event === "PASSWORD_RECOVERY") {
+        setPasswordRecoveryRequested();
+        setIsPasswordRecovery(true);
+      }
+
+      if (event === "SIGNED_IN" && nextSession && isPasswordRecoveryRequested()) {
         setIsPasswordRecovery(true);
       }
 
@@ -748,6 +775,7 @@ export function App() {
     }
 
     await supabase.auth.signOut();
+    clearPasswordRecoveryRequested();
     setProjects([]);
     setSelectedId("");
     setSelectedMaterialId("");
