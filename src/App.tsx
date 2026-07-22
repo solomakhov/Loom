@@ -175,6 +175,21 @@ function getRecoveryCode() {
   return params.get("code");
 }
 
+function getHashSessionTokens() {
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const accessToken = hashParams.get("access_token");
+  const refreshToken = hashParams.get("refresh_token");
+
+  if (!accessToken || !refreshToken) {
+    return null;
+  }
+
+  return {
+    access_token: accessToken,
+    refresh_token: refreshToken,
+  };
+}
+
 function isPasswordRecoveryRequested() {
   return window.localStorage.getItem(PASSWORD_RECOVERY_REQUESTED_KEY) === "true";
 }
@@ -419,7 +434,7 @@ export function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(isSupabaseConfigured);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(() => isRecoveryUrl());
 
   useEffect(() => {
     latestProjectsRef.current = projects;
@@ -438,12 +453,34 @@ export function App() {
       try {
         if (isRecoveryUrl()) {
           setPasswordRecoveryRequested();
+          setIsPasswordRecovery(true);
         }
 
         const recoveryCode = getRecoveryCode();
+        const hashSessionTokens = getHashSessionTokens();
 
         if (recoveryCode) {
           const { data, error } = await client.auth.exchangeCodeForSession(recoveryCode);
+
+          if (error) {
+            console.error(error);
+          }
+
+          if (!isMounted) {
+            return;
+          }
+
+          if (data.session) {
+            setPasswordRecoveryRequested();
+            setIsPasswordRecovery(true);
+            setSession(data.session);
+            window.history.replaceState({}, document.title, `${window.location.origin}?mode=recovery`);
+            return;
+          }
+        }
+
+        if (hashSessionTokens) {
+          const { data, error } = await client.auth.setSession(hashSessionTokens);
 
           if (error) {
             console.error(error);
