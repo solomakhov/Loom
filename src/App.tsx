@@ -158,6 +158,17 @@ function getErrorMessage(error: unknown) {
   }
 }
 
+function isRecoveryUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+
+  return (
+    params.get("mode") === "recovery" ||
+    params.get("type") === "recovery" ||
+    hashParams.get("type") === "recovery"
+  );
+}
+
 type AuthMode = "sign-in" | "sign-up" | "reset-password";
 
 function AuthPanel() {
@@ -180,7 +191,7 @@ function AuthPanel() {
     const { error } = await (async () => {
       if (mode === "reset-password") {
         return supabase.auth.resetPasswordForEmail(email.trim(), {
-          redirectTo: window.location.origin,
+          redirectTo: `${window.location.origin}?mode=recovery`,
         });
       }
 
@@ -331,6 +342,7 @@ function PasswordRecoveryPanel({ onComplete }: PasswordRecoveryPanelProps) {
 
     setPassword("");
     setMessage("Пароль обновлен.");
+    window.history.replaceState({}, document.title, window.location.origin);
     onComplete();
   }
 
@@ -380,7 +392,7 @@ export function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(isSupabaseConfigured);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(() => isRecoveryUrl());
 
   useEffect(() => {
     latestProjectsRef.current = projects;
@@ -397,6 +409,10 @@ export function App() {
     supabase.auth.getSession().then(({ data }) => {
       if (!isMounted) {
         return;
+      }
+
+      if (isRecoveryUrl()) {
+        setIsPasswordRecovery(true);
       }
 
       setSession(data.session);
