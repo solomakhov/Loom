@@ -253,6 +253,27 @@ function uniqueById<T extends { id: string }>(items: T[]) {
   return Array.from(new Map(items.map((item) => [item.id, item])).values());
 }
 
+async function getCurrentUserId() {
+  if (!supabase) {
+    return "";
+  }
+
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!user) {
+    throw new Error("No authenticated Supabase user.");
+  }
+
+  return user.id;
+}
+
 function loadProjectsFromLocalStorage(): Project[] {
   const raw = window.localStorage.getItem(STORAGE_KEY);
 
@@ -365,9 +386,11 @@ export async function saveProjects(projects: Project[]) {
     return;
   }
 
+  const userId = await getCurrentUserId();
   const normalizedProjects = projects.map(normalizeProject);
   const projectRows = normalizedProjects.map((project) => ({
     id: project.id,
+    user_id: userId,
     title: project.title,
     description: project.description,
     status: project.status,
@@ -399,7 +422,7 @@ export async function saveProjects(projects: Project[]) {
       throw deleteError;
     }
 
-    await saveProjectChildren(normalizedProjects);
+    await saveProjectChildren(normalizedProjects, userId);
     return;
   }
 
@@ -416,7 +439,7 @@ export async function saveProjects(projects: Project[]) {
   }
 }
 
-async function saveProjectChildren(projects: Project[]) {
+async function saveProjectChildren(projects: Project[], userId: string) {
   if (!supabase) {
     return;
   }
@@ -428,16 +451,18 @@ async function saveProjectChildren(projects: Project[]) {
   }
 
   const tagRows = projects.flatMap((project) =>
-    project.tags.map((tag) => ({
-      project_id: project.id,
-      tag,
-    })),
+      project.tags.map((tag) => ({
+        project_id: project.id,
+        user_id: userId,
+        tag,
+      })),
   );
 
   const taskRows = projects
     .flatMap((project) =>
       project.tasks.map((task, index) => ({
         id: task.id,
+        user_id: userId,
         project_id: project.id,
         parent_task_id: task.parentTaskId ?? null,
         title: task.title,
@@ -453,6 +478,7 @@ async function saveProjectChildren(projects: Project[]) {
     projects.flatMap((project) =>
       project.materials.map((material) => ({
         id: material.id,
+        user_id: userId,
         title: material.title,
         markdown: material.markdown,
         created_at: material.createdAt,
@@ -464,6 +490,7 @@ async function saveProjectChildren(projects: Project[]) {
   const materialLinkRows = projects.flatMap((project) =>
     project.materials.map((material) => ({
       material_id: material.id,
+      user_id: userId,
       project_id: project.id,
       task_id: null,
     })),

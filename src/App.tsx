@@ -327,7 +327,9 @@ export function App() {
       setSaveStatus("saved");
     } catch (error) {
       console.error(error);
-      setStorageError("Не удалось сохранить данные.");
+      setStorageError(
+        error instanceof Error ? `Не удалось сохранить данные: ${error.message}` : "Не удалось сохранить данные.",
+      );
       setSaveStatus("error");
 
       if (previousProjects) {
