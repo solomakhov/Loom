@@ -39,10 +39,74 @@ button {
   background-size: 28px 28px;
 }
 
+.auth-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 20px;
+  background:
+    linear-gradient(90deg, rgba(47, 79, 79, 0.05) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(47, 79, 79, 0.04) 1px, transparent 1px),
+    #f6f7f3;
+  background-size: 28px 28px;
+}
+
+.auth-panel {
+  display: grid;
+  gap: 16px;
+  width: min(420px, 100%);
+  padding: 26px;
+  border: 1px solid #cad5cc;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 90px rgba(24, 42, 36, 0.14);
+}
+
+.auth-panel p {
+  color: #3f4e48;
+  line-height: 1.55;
+}
+
+.auth-panel label {
+  display: grid;
+  gap: 7px;
+  color: #31433c;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.auth-panel input {
+  height: 42px;
+  width: 100%;
+  border: 1px solid #cbd6ce;
+  border-radius: 8px;
+  background: #fbfcfa;
+  color: #1f2933;
+  outline: 0;
+  padding: 0 11px;
+}
+
+.auth-panel input:focus {
+  border-color: #467266;
+  box-shadow: 0 0 0 3px rgba(70, 114, 102, 0.14);
+}
+
+.auth-message {
+  margin: 0;
+  color: #315448;
+  font-weight: 800;
+}
+
 .sidebar {
   border-right: 1px solid #d7ddd3;
   background: rgba(255, 255, 255, 0.72);
   padding: 28px;
+}
+
+.sidebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .brand-row,
@@ -286,6 +350,36 @@ h3 {
   font-size: 0.92rem;
   margin-bottom: 18px;
   padding: 12px 14px;
+}
+
+.save-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  margin-bottom: 12px;
+  padding: 0 10px;
+  border: 1px solid #d7ddd3;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #60736a;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.save-status.pending,
+.save-status.saving {
+  border-color: #d8b35f;
+  color: #6b4d08;
+}
+
+.save-status.saved {
+  border-color: #9fbeab;
+  color: #245b3f;
+}
+
+.save-status.error {
+  border-color: #d88b92;
+  color: #9b2933;
 }
 
 .project-heading {

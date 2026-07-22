@@ -155,32 +155,10 @@ function saveProjectsToLocalStorage(projects: Project[]) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
 }
 
-async function ensureSupabaseSession() {
-  if (!supabase) {
-    return;
-  }
-
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
-  if (session) {
-    return;
-  }
-
-  const { error } = await supabase.auth.signInAnonymously();
-
-  if (error) {
-    throw error;
-  }
-}
-
 export async function loadProjects(): Promise<Project[]> {
   if (!supabase) {
     return loadProjectsFromLocalStorage();
   }
-
-  await ensureSupabaseSession();
 
   const { data, error } = await supabase
     .from(SUPABASE_PROJECTS_TABLE)
@@ -194,8 +172,9 @@ export async function loadProjects(): Promise<Project[]> {
   const rows = (data ?? []) as ProjectRow[];
 
   if (!rows.length) {
-    await saveProjects(seedProjects);
-    return seedProjects;
+    const localProjects = loadProjectsFromLocalStorage();
+    await saveProjects(localProjects);
+    return localProjects;
   }
 
   return rows.map((row) => normalizeProject(row.data));
@@ -207,8 +186,6 @@ export async function saveProjects(projects: Project[]) {
   if (!supabase) {
     return;
   }
-
-  await ensureSupabaseSession();
 
   const rows = projects.map((project) => ({
     id: project.id,

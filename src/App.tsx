@@ -1,4 +1,5 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
 import {
   Archive,
   CalendarDays,
@@ -9,6 +10,7 @@ import {
   FileText,
   Filter,
   ListChecks,
+  LogOut,
   Plus,
   Save,
   Search,
@@ -17,6 +19,7 @@ import {
 } from "lucide-react";
 import { MaterialEditor } from "./MaterialEditor";
 import { loadProjects, saveProjects } from "./storage";
+import { isSupabaseConfigured, supabase } from "./supabase";
 import {
   Project,
   ProjectDraft,
@@ -49,6 +52,23 @@ const emptyDraft: ProjectDraft = {
   tagsInput: "",
   icon: "L",
 };
+
+type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
+
+function getSaveStatusLabel(status: SaveStatus) {
+  switch (status) {
+    case "pending":
+      return "Есть несохраненные изменения";
+    case "saving":
+      return "Сохраняем...";
+    case "saved":
+      return "Сохранено";
+    case "error":
+      return "Ошибка сохранения";
+    default:
+      return "Сохранение не требуется";
+  }
+}
 
 function toDraft(project: Project): ProjectDraft {
   return {
@@ -122,7 +142,69 @@ function isOverdue(project: Project) {
   return new Date(`${project.dueDate}T00:00:00`) < today;
 }
 
+function AuthPanel() {
+  const [email, setEmail] = useState("");
+  const [message, setMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  async function handleSignIn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!supabase || !email.trim()) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    setMessage("");
+
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: {
+        emailRedirectTo: window.location.origin,
+      },
+    });
+
+    setIsSubmitting(false);
+
+    if (error) {
+      setMessage("Не удалось отправить ссылку входа.");
+      return;
+    }
+
+    setMessage("Проверь почту и открой ссылку входа.");
+  }
+
+  return (
+    <main className="auth-shell">
+      <form className="auth-panel" onSubmit={handleSignIn}>
+        <p className="eyebrow">Loom</p>
+        <h1>Вход</h1>
+        <p>Укажи email. Supabase отправит ссылку для входа без пароля.</p>
+
+        <label>
+          Email
+          <input
+            required
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            placeholder="you@example.com"
+          />
+        </label>
+
+        <button className="text-button primary" type="submit" disabled={isSubmitting}>
+          {isSubmitting ? "Отправляем..." : "Получить ссылку"}
+        </button>
+
+        {message ? <p className="auth-message">{message}</p> : null}
+      </form>
+    </main>
+  );
+}
+
 export function App() {
+  const saveTimerRef = useRef<number | null>(null);
+  const latestProjectsRef = useRef<Project[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [query, setQuery] = useState("");
@@ -134,9 +216,55 @@ export function App() {
   const [selectedMaterialId, setSelectedMaterialId] = useState("");
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [storageError, setStorageError] = useState("");
+  const [session, setSession] = useState<Session | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(isSupabaseConfigured);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
 
   useEffect(() => {
+    latestProjectsRef.current = projects;
+  }, [projects]);
+
+  useEffect(() => {
+    if (!supabase) {
+      setIsAuthLoading(false);
+      return;
+    }
+
     let isMounted = true;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!isMounted) {
+        return;
+      }
+
+      setSession(data.session);
+      setIsAuthLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isSupabaseConfigured && !session) {
+      setProjects([]);
+      setSelectedId("");
+      setSelectedMaterialId("");
+      setIsLoadingProjects(false);
+      return;
+    }
+
+    let isMounted = true;
+
+    setIsLoadingProjects(true);
 
     loadProjects()
       .then((loadedProjects) => {
@@ -147,6 +275,7 @@ export function App() {
         setProjects(loadedProjects);
         setSelectedId((currentId) => currentId || loadedProjects[0]?.id || "");
         setStorageError("");
+        setSaveStatus("saved");
       })
       .catch((error) => {
         console.error(error);
@@ -163,6 +292,14 @@ export function App() {
 
     return () => {
       isMounted = false;
+    };
+  }, [session]);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+      }
     };
   }, []);
 
@@ -181,15 +318,45 @@ export function App() {
     });
   }, [projects, query, statusFilter]);
 
-  function commitProjects(nextProjects: Project[]) {
-    const previousProjects = projects;
+  async function persistProjects(nextProjects: Project[], previousProjects?: Project[]) {
+    setSaveStatus("saving");
 
-    setProjects(nextProjects);
-    saveProjects(nextProjects).catch((error) => {
+    try {
+      await saveProjects(nextProjects);
+      setStorageError("");
+      setSaveStatus("saved");
+    } catch (error) {
       console.error(error);
       setStorageError("Не удалось сохранить данные.");
-      setProjects(previousProjects);
-    });
+      setSaveStatus("error");
+
+      if (previousProjects) {
+        setProjects(previousProjects);
+      }
+    }
+  }
+
+  function commitProjects(nextProjects: Project[], options: { debounce?: boolean } = {}) {
+    const previousProjects = latestProjectsRef.current;
+
+    latestProjectsRef.current = nextProjects;
+    setProjects(nextProjects);
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    setSaveStatus(options.debounce ? "pending" : "saving");
+
+    if (options.debounce) {
+      saveTimerRef.current = window.setTimeout(() => {
+        persistProjects(latestProjectsRef.current);
+      }, 800);
+      return;
+    }
+
+    persistProjects(nextProjects, previousProjects);
   }
 
   function updateProjectTasks(projectId: string, nextTasks: ProjectTask[]) {
@@ -209,7 +376,11 @@ export function App() {
     );
   }
 
-  function updateProjectMaterials(projectId: string, nextMaterials: ProjectMaterial[]) {
+  function updateProjectMaterials(
+    projectId: string,
+    nextMaterials: ProjectMaterial[],
+    options: { debounce?: boolean } = {},
+  ) {
     const now = new Date().toISOString();
 
     commitProjects(
@@ -222,6 +393,7 @@ export function App() {
             }
           : project,
       ),
+      options,
     );
   }
 
@@ -289,6 +461,10 @@ export function App() {
   }
 
   function deleteProject(project: Project) {
+    if (!window.confirm(`Удалить проект "${project.title}"? Это действие нельзя отменить.`)) {
+      return;
+    }
+
     const nextProjects = projects.filter((item) => item.id !== project.id);
     commitProjects(nextProjects);
     setSelectedId(nextProjects[0]?.id ?? "");
@@ -324,6 +500,12 @@ export function App() {
   }
 
   function deleteTask(project: Project, taskId: string) {
+    const task = project.tasks.find((item) => item.id === taskId);
+
+    if (!window.confirm(`Удалить задачу "${task?.title ?? "Без названия"}"?`)) {
+      return;
+    }
+
     updateProjectTasks(
       project.id,
       project.tasks.filter((task) => task.id !== taskId),
@@ -350,7 +532,7 @@ export function App() {
       material.id === materialId ? { ...material, markdown, updatedAt: now } : material,
     );
 
-    updateProjectMaterials(project.id, nextMaterials);
+    updateProjectMaterials(project.id, nextMaterials, { debounce: true });
   }
 
   function renameMaterial(project: Project, materialId: string, title: string) {
@@ -359,14 +541,48 @@ export function App() {
       material.id === materialId ? { ...material, title, updatedAt: now } : material,
     );
 
-    updateProjectMaterials(project.id, nextMaterials);
+    updateProjectMaterials(project.id, nextMaterials, { debounce: true });
   }
 
   function deleteMaterial(project: Project, materialId: string) {
+    const material = project.materials.find((item) => item.id === materialId);
+
+    if (!window.confirm(`Удалить материал "${material?.title ?? "Без названия"}"?`)) {
+      return;
+    }
+
     const nextMaterials = project.materials.filter((material) => material.id !== materialId);
 
     updateProjectMaterials(project.id, nextMaterials);
     setSelectedMaterialId(nextMaterials[0]?.id ?? "");
+  }
+
+  async function signOut() {
+    if (!supabase) {
+      return;
+    }
+
+    await supabase.auth.signOut();
+    setProjects([]);
+    setSelectedId("");
+    setSelectedMaterialId("");
+    setSaveStatus("idle");
+  }
+
+  if (isAuthLoading) {
+    return (
+      <main className="auth-shell">
+        <div className="auth-panel">
+          <p className="eyebrow">Loom</p>
+          <h1>Загружаем</h1>
+          <p>Проверяем текущую сессию.</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (isSupabaseConfigured && !session) {
+    return <AuthPanel />;
   }
 
   return (
@@ -377,9 +593,16 @@ export function App() {
             <p className="eyebrow">Loom</p>
             <h1>Проекты</h1>
           </div>
-          <button className="icon-button primary" type="button" onClick={openCreateForm} title="Создать проект">
-            <Plus size={18} />
-          </button>
+          <div className="sidebar-actions">
+            {session ? (
+              <button className="icon-button" type="button" onClick={signOut} title="Выйти">
+                <LogOut size={17} />
+              </button>
+            ) : null}
+            <button className="icon-button primary" type="button" onClick={openCreateForm} title="Создать проект">
+              <Plus size={18} />
+            </button>
+          </div>
         </div>
 
         <label className="search-box">
@@ -431,6 +654,10 @@ export function App() {
       </section>
 
       <section className="project-view" aria-label="Обзор проекта">
+        <div className={`save-status ${saveStatus}`}>
+          {getSaveStatusLabel(saveStatus)}
+        </div>
+
         {storageError ? <div className="storage-banner">{storageError}</div> : null}
 
         {isLoadingProjects ? (
