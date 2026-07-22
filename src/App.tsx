@@ -170,6 +170,11 @@ function isRecoveryUrl() {
   );
 }
 
+function getRecoveryCode() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("code");
+}
+
 function isPasswordRecoveryRequested() {
   return window.localStorage.getItem(PASSWORD_RECOVERY_REQUESTED_KEY) === "true";
 }
@@ -207,6 +212,8 @@ function AuthPanel() {
           redirectTo: `${window.location.origin}?mode=recovery`,
         });
       }
+
+      clearPasswordRecoveryRequested();
 
       const credentials = {
         email: email.trim(),
@@ -412,9 +419,7 @@ export function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(isSupabaseConfigured);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const [isPasswordRecovery, setIsPasswordRecovery] = useState(
-    () => isRecoveryUrl() || isPasswordRecoveryRequested(),
-  );
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
 
   useEffect(() => {
     latestProjectsRef.current = projects;
@@ -426,24 +431,60 @@ export function App() {
       return;
     }
 
+    const client = supabase;
     let isMounted = true;
 
-    supabase.auth.getSession().then(({ data }) => {
-      if (!isMounted) {
-        return;
-      }
+    async function initializeAuth() {
+      try {
+        if (isRecoveryUrl()) {
+          setPasswordRecoveryRequested();
+        }
 
-      if (data.session && (isRecoveryUrl() || isPasswordRecoveryRequested())) {
-        setIsPasswordRecovery(true);
-      }
+        const recoveryCode = getRecoveryCode();
 
-      setSession(data.session);
-      setIsAuthLoading(false);
-    });
+        if (recoveryCode) {
+          const { data, error } = await client.auth.exchangeCodeForSession(recoveryCode);
+
+          if (error) {
+            console.error(error);
+          }
+
+          if (!isMounted) {
+            return;
+          }
+
+          if (data.session) {
+            setPasswordRecoveryRequested();
+            setIsPasswordRecovery(true);
+            setSession(data.session);
+            window.history.replaceState({}, document.title, `${window.location.origin}?mode=recovery`);
+            return;
+          }
+        }
+
+        const { data } = await client.auth.getSession();
+
+        if (!isMounted) {
+          return;
+        }
+
+        if (data.session && (isRecoveryUrl() || isPasswordRecoveryRequested())) {
+          setIsPasswordRecovery(true);
+        }
+
+        setSession(data.session);
+      } finally {
+        if (isMounted) {
+          setIsAuthLoading(false);
+        }
+      }
+    }
+
+    initializeAuth();
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+    } = client.auth.onAuthStateChange((event, nextSession) => {
       if (event === "PASSWORD_RECOVERY") {
         setPasswordRecoveryRequested();
         setIsPasswordRecovery(true);
@@ -794,12 +835,12 @@ export function App() {
     );
   }
 
-  if (isSupabaseConfigured && !session) {
-    return <AuthPanel />;
-  }
-
   if (isSupabaseConfigured && isPasswordRecovery) {
     return <PasswordRecoveryPanel onComplete={() => setIsPasswordRecovery(false)} />;
+  }
+
+  if (isSupabaseConfigured && !session) {
+    return <AuthPanel />;
   }
 
   return (
