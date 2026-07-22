@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
+  ArrowDown,
+  ArrowUp,
   Archive,
   CalendarDays,
   Check,
@@ -9,12 +11,14 @@ import {
   Edit3,
   FileText,
   Filter,
+  Link2,
   ListChecks,
   LogOut,
   Plus,
   Save,
   Search,
   Trash2,
+  Unlink,
   X,
 } from "lucide-react";
 import { MaterialEditor } from "./MaterialEditor";
@@ -55,6 +59,7 @@ const emptyDraft: ProjectDraft = {
 
 type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
 const PASSWORD_RECOVERY_REQUESTED_KEY = "loom.passwordRecoveryRequested";
+const appUrl = (import.meta.env.VITE_APP_URL || window.location.origin).replace(/\/$/, "");
 
 function getSaveStatusLabel(status: SaveStatus) {
   switch (status) {
@@ -112,6 +117,74 @@ function calculateProgress(tasks: ProjectTask[]) {
 
   const completedCount = tasks.filter((task) => task.done).length;
   return Math.round((completedCount / tasks.length) * 100);
+}
+
+function getTaskParentKey(parentTaskId?: string) {
+  return parentTaskId ?? "";
+}
+
+function getTaskSiblings(tasks: ProjectTask[], parentTaskId?: string) {
+  const parentKey = getTaskParentKey(parentTaskId);
+
+  return tasks
+    .filter((task) => getTaskParentKey(task.parentTaskId) === parentKey)
+    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+}
+
+function normalizeTaskPositions(tasks: ProjectTask[]) {
+  const normalizedTasks = tasks.map((task) => ({ ...task }));
+  const parentKeys = new Set(normalizedTasks.map((task) => getTaskParentKey(task.parentTaskId)));
+
+  parentKeys.forEach((parentKey) => {
+    getTaskSiblings(normalizedTasks, parentKey || undefined).forEach((task, index) => {
+      task.position = index;
+    });
+  });
+
+  return normalizedTasks;
+}
+
+function getTaskDescendantIds(tasks: ProjectTask[], taskId: string) {
+  const ids = new Set([taskId]);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+
+    tasks.forEach((task) => {
+      if (task.parentTaskId && ids.has(task.parentTaskId) && !ids.has(task.id)) {
+        ids.add(task.id);
+        changed = true;
+      }
+    });
+  }
+
+  return ids;
+}
+
+type TaskTreeItem = {
+  task: ProjectTask;
+  depth: number;
+  siblingIndex: number;
+  siblingCount: number;
+};
+
+function getTaskTreeItems(tasks: ProjectTask[], parentTaskId?: string, depth = 0): TaskTreeItem[] {
+  const siblings = getTaskSiblings(tasks, parentTaskId);
+
+  return siblings.flatMap((task, index) => [
+    {
+      task,
+      depth,
+      siblingIndex: index,
+      siblingCount: siblings.length,
+    },
+    ...getTaskTreeItems(tasks, task.id, depth + 1),
+  ]);
+}
+
+function getTaskSelectLabel(task: ProjectTask, depth: number) {
+  return `${"--".repeat(depth)}${depth ? " " : ""}${task.title}`;
 }
 
 function parseTags(value: string) {
@@ -202,6 +275,10 @@ function clearPasswordRecoveryRequested() {
   window.localStorage.removeItem(PASSWORD_RECOVERY_REQUESTED_KEY);
 }
 
+function getPasswordRecoveryRedirectUrl() {
+  return `${appUrl}/?mode=recovery`;
+}
+
 type AuthMode = "sign-in" | "sign-up" | "reset-password";
 
 function AuthPanel() {
@@ -224,7 +301,7 @@ function AuthPanel() {
     const { error } = await (async () => {
       if (mode === "reset-password") {
         return supabase.auth.resetPasswordForEmail(email.trim(), {
-          redirectTo: `${window.location.origin}?mode=recovery`,
+          redirectTo: getPasswordRecoveryRedirectUrl(),
         });
       }
 
@@ -474,7 +551,7 @@ export function App() {
             setPasswordRecoveryRequested();
             setIsPasswordRecovery(true);
             setSession(data.session);
-            window.history.replaceState({}, document.title, `${window.location.origin}?mode=recovery`);
+            window.history.replaceState({}, document.title, getPasswordRecoveryRedirectUrl());
             return;
           }
         }
@@ -494,7 +571,7 @@ export function App() {
             setPasswordRecoveryRequested();
             setIsPasswordRecovery(true);
             setSession(data.session);
-            window.history.replaceState({}, document.title, `${window.location.origin}?mode=recovery`);
+            window.history.replaceState({}, document.title, getPasswordRecoveryRedirectUrl());
             return;
           }
         }
@@ -594,6 +671,7 @@ export function App() {
   const selectedMaterial =
     selectedProject?.materials.find((material) => material.id === selectedMaterialId) ??
     selectedProject?.materials[0];
+  const selectedTaskItems = selectedProject ? getTaskTreeItems(selectedProject.tasks) : [];
 
   const filteredProjects = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -760,24 +838,36 @@ export function App() {
     setSelectedId(nextProjects[0]?.id ?? "");
   }
 
-  function addTask(project: Project) {
-    const title = newTaskTitle.trim();
+  function addTask(project: Project, title: string, parentTaskId?: string) {
+    const normalizedTitle = title.trim();
 
-    if (!title) {
+    if (!normalizedTitle) {
       return;
     }
 
     const now = new Date().toISOString();
     const task: ProjectTask = {
       id: crypto.randomUUID(),
-      title,
+      title: normalizedTitle,
       done: false,
+      parentTaskId,
+      position: getTaskSiblings(project.tasks, parentTaskId).length,
       createdAt: now,
       updatedAt: now,
     };
 
-    updateProjectTasks(project.id, [...project.tasks, task]);
+    updateProjectTasks(project.id, normalizeTaskPositions([...project.tasks, task]));
     setNewTaskTitle("");
+  }
+
+  function addSubtask(project: Project, parentTaskId: string) {
+    const title = window.prompt("Название подзадачи");
+
+    if (!title) {
+      return;
+    }
+
+    addTask(project, title, parentTaskId);
   }
 
   function toggleTask(project: Project, taskId: string) {
@@ -791,15 +881,66 @@ export function App() {
 
   function deleteTask(project: Project, taskId: string) {
     const task = project.tasks.find((item) => item.id === taskId);
+    const removedTaskIds = getTaskDescendantIds(project.tasks, taskId);
 
     if (!window.confirm(`Удалить задачу "${task?.title ?? "Без названия"}"?`)) {
       return;
     }
 
-    updateProjectTasks(
-      project.id,
-      project.tasks.filter((task) => task.id !== taskId),
+    const now = new Date().toISOString();
+    const nextTasks = normalizeTaskPositions(
+      project.tasks.filter((task) => !removedTaskIds.has(task.id)),
     );
+    const nextMaterials = project.materials.map((material) =>
+      material.taskId && removedTaskIds.has(material.taskId)
+        ? { ...material, taskId: undefined, updatedAt: now }
+        : material,
+    );
+
+    commitProjects(
+      projects.map((item) =>
+        item.id === project.id
+          ? {
+              ...item,
+              tasks: nextTasks,
+              materials: nextMaterials,
+              progress: calculateProgress(nextTasks),
+              updatedAt: now,
+            }
+          : item,
+      ),
+    );
+  }
+
+  function moveTask(project: Project, taskId: string, direction: -1 | 1) {
+    const task = project.tasks.find((item) => item.id === taskId);
+
+    if (!task) {
+      return;
+    }
+
+    const siblings = getTaskSiblings(project.tasks, task.parentTaskId);
+    const currentIndex = siblings.findIndex((item) => item.id === taskId);
+    const targetTask = siblings[currentIndex + direction];
+
+    if (!targetTask) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const nextTasks = project.tasks.map((item) => {
+      if (item.id === task.id) {
+        return { ...item, position: targetTask.position ?? currentIndex + direction, updatedAt: now };
+      }
+
+      if (item.id === targetTask.id) {
+        return { ...item, position: task.position ?? currentIndex, updatedAt: now };
+      }
+
+      return item;
+    });
+
+    updateProjectTasks(project.id, normalizeTaskPositions(nextTasks));
   }
 
   function addMaterial(project: Project) {
@@ -832,6 +973,17 @@ export function App() {
     );
 
     updateProjectMaterials(project.id, nextMaterials, { debounce: true });
+  }
+
+  function linkMaterialToTask(project: Project, materialId: string, taskId: string) {
+    const now = new Date().toISOString();
+    const nextMaterials = project.materials.map((material) =>
+      material.id === materialId
+        ? { ...material, taskId: taskId || undefined, updatedAt: now }
+        : material,
+    );
+
+    updateProjectMaterials(project.id, nextMaterials);
   }
 
   function deleteMaterial(project: Project, materialId: string) {
@@ -1059,7 +1211,7 @@ export function App() {
                 className="task-form"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  addTask(selectedProject);
+                  addTask(selectedProject, newTaskTitle);
                 }}
               >
                 <input
@@ -1074,8 +1226,12 @@ export function App() {
 
               <div className="task-list">
                 {selectedProject.tasks.length ? (
-                  selectedProject.tasks.map((task) => (
-                    <div className={task.done ? "task-row done" : "task-row"} key={task.id}>
+                  selectedTaskItems.map(({ task, depth, siblingIndex, siblingCount }) => (
+                    <div
+                      className={task.done ? "task-row done" : "task-row"}
+                      key={task.id}
+                      style={{ marginLeft: depth ? `${depth * 20}px` : undefined }}
+                    >
                       <label>
                         <input
                           checked={task.done}
@@ -1084,14 +1240,42 @@ export function App() {
                         />
                         <span>{task.title}</span>
                       </label>
-                      <button
-                        className="icon-button danger"
-                        type="button"
-                        onClick={() => deleteTask(selectedProject, task.id)}
-                        title="Удалить задачу"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      <div className="task-actions">
+                        <button
+                          className="icon-button"
+                          type="button"
+                          onClick={() => moveTask(selectedProject, task.id, -1)}
+                          disabled={siblingIndex === 0}
+                          title="Выше"
+                        >
+                          <ArrowUp size={15} />
+                        </button>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          onClick={() => moveTask(selectedProject, task.id, 1)}
+                          disabled={siblingIndex === siblingCount - 1}
+                          title="Ниже"
+                        >
+                          <ArrowDown size={15} />
+                        </button>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          onClick={() => addSubtask(selectedProject, task.id)}
+                          title="Добавить подзадачу"
+                        >
+                          <Plus size={15} />
+                        </button>
+                        <button
+                          className="icon-button danger"
+                          type="button"
+                          onClick={() => deleteTask(selectedProject, task.id)}
+                          title="Удалить задачу"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
                     </div>
                   ))
                 ) : (
@@ -1129,7 +1313,17 @@ export function App() {
                         onClick={() => setSelectedMaterialId(material.id)}
                       >
                         <FileText size={16} />
-                        <span>{material.title}</span>
+                        <span className="material-row-copy">
+                          <span>{material.title}</span>
+                          {material.taskId ? (
+                            <small>
+                              {selectedProject.tasks.find((task) => task.id === material.taskId)?.title ??
+                                "Задача"}
+                            </small>
+                          ) : (
+                            <small>Проект</small>
+                          )}
+                        </span>
                       </button>
                     ))
                   ) : (
@@ -1156,6 +1350,35 @@ export function App() {
                         >
                           <Trash2 size={16} />
                         </button>
+                      </div>
+                      <div className="material-link-row">
+                        <label>
+                          <Link2 size={15} />
+                          <select
+                            value={selectedMaterial.taskId ?? ""}
+                            onChange={(event) =>
+                              linkMaterialToTask(selectedProject, selectedMaterial.id, event.target.value)
+                            }
+                            aria-label="Привязка материала"
+                          >
+                            <option value="">Проект целиком</option>
+                            {selectedTaskItems.map(({ task, depth }) => (
+                              <option key={task.id} value={task.id}>
+                                {getTaskSelectLabel(task, depth)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        {selectedMaterial.taskId ? (
+                          <button
+                            className="icon-button"
+                            type="button"
+                            onClick={() => linkMaterialToTask(selectedProject, selectedMaterial.id, "")}
+                            title="Отвязать от задачи"
+                          >
+                            <Unlink size={15} />
+                          </button>
+                        ) : null}
                       </div>
                       <MaterialEditor
                         key={selectedMaterial.id}

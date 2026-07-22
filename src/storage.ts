@@ -202,14 +202,24 @@ function buildProjectFromRows(
   materialRows: MaterialRow[],
   materialLinkRows: MaterialLinkRow[],
 ): Project {
+  const projectTaskRows = taskRows.filter((task) => task.project_id === projectRow.id);
+  const projectTaskIds = new Set(projectTaskRows.map((task) => task.id));
+  const projectMaterialLinks = materialLinkRows.filter(
+    (link) => link.project_id === projectRow.id || (link.task_id && projectTaskIds.has(link.task_id)),
+  );
+
   const projectMaterials = materialLinkRows
-    .filter((link) => link.project_id === projectRow.id)
+    .filter((link) => projectMaterialLinks.includes(link))
     .map((link) => materialRows.find((material) => material.id === link.material_id))
     .filter((material): material is MaterialRow => Boolean(material))
+    .filter((material, index, materials) => materials.findIndex((item) => item.id === material.id) === index)
     .map((material) => ({
       id: material.id,
       title: material.title,
       markdown: material.markdown,
+      taskId: projectMaterialLinks.find(
+        (link) => link.material_id === material.id && link.task_id && projectTaskIds.has(link.task_id),
+      )?.task_id ?? undefined,
       createdAt: material.created_at,
       updatedAt: material.updated_at,
     }));
@@ -367,8 +377,14 @@ export async function loadProjects(): Promise<Project[]> {
     throw materialLinksError;
   }
 
-  loadedMaterialIds = new Set((materialRows ?? []).map((material) => material.id));
   loadedProjectIds = new Set(projects.map((project) => project.id));
+
+  const loadedTaskIds = new Set(((taskRows ?? []) as ProjectTaskRow[]).map((task) => task.id));
+  loadedMaterialIds = new Set(
+    ((materialLinkRows ?? []) as MaterialLinkRow[])
+      .filter((link) => link.project_id || (link.task_id && loadedTaskIds.has(link.task_id)))
+      .map((link) => link.material_id),
+  );
 
   return projects.map((project) =>
     buildProjectFromRows(
@@ -502,15 +518,15 @@ async function saveProjectChildren(projects: Project[], userId: string) {
     project.materials.map((material) => ({
       material_id: material.id,
       user_id: userId,
-      project_id: project.id,
-      task_id: null,
+      project_id: material.taskId ? null : project.id,
+      task_id: material.taskId ?? null,
     })),
   );
 
   const currentMaterialIds = new Set(materialRows.map((material) => material.id));
 
   await deleteRowsForProjects("project_tags", projectIds);
-  await deleteRowsForProjects("material_links", projectIds);
+  await deleteMaterialLinksForProjects(projectIds, taskRows.map((task) => task.id));
 
   if (tagRows.length) {
     const { error } = await supabase.from("project_tags").insert(tagRows);
@@ -563,6 +579,34 @@ async function deleteRowsForProjects(tableName: string, projectIds: string[]) {
 
   if (error) {
     throw error;
+  }
+}
+
+async function deleteMaterialLinksForProjects(projectIds: string[], taskIds: string[]) {
+  if (!supabase || !projectIds.length) {
+    return;
+  }
+
+  const { error: projectLinkError } = await supabase
+    .from("material_links")
+    .delete()
+    .in("project_id", projectIds);
+
+  if (projectLinkError) {
+    throw projectLinkError;
+  }
+
+  if (!taskIds.length) {
+    return;
+  }
+
+  const { error: taskLinkError } = await supabase
+    .from("material_links")
+    .delete()
+    .in("task_id", taskIds);
+
+  if (taskLinkError) {
+    throw taskLinkError;
   }
 }
 

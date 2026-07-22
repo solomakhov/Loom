@@ -182,6 +182,12 @@ h3 {
   transform: translateY(-1px);
 }
 
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+  transform: none;
+}
+
 .icon-button {
   display: inline-grid;
   width: 38px;
@@ -547,7 +553,7 @@ h3 {
 
 .task-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   min-height: 46px;
@@ -584,6 +590,12 @@ h3 {
 .task-row .icon-button {
   width: 34px;
   height: 34px;
+}
+
+.task-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .materials-section {
@@ -632,9 +644,25 @@ h3 {
   background: #ffffff;
 }
 
-.material-row span {
+.material-row-copy,
+.material-row-copy > span {
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.material-row-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.material-row-copy small {
+  min-width: 0;
+  overflow: hidden;
+  color: #6f7d75;
+  font-size: 0.74rem;
+  font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -665,6 +693,39 @@ h3 {
 }
 
 .material-title-row input:focus {
+  border-color: #467266;
+  box-shadow: 0 0 0 3px rgba(70, 114, 102, 0.14);
+}
+
+.material-link-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.material-link-row label {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #60736a;
+}
+
+.material-link-row select {
+  height: 38px;
+  min-width: 0;
+  border: 1px solid #cbd6ce;
+  border-radius: 8px;
+  background: #fbfcfa;
+  color: #17241f;
+  font-weight: 800;
+  outline: 0;
+  padding: 0 10px;
+}
+
+.material-link-row select:focus {
   border-color: #467266;
   box-shadow: 0 0 0 3px rgba(70, 114, 102, 0.14);
 }
