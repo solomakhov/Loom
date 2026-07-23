@@ -506,6 +506,7 @@ export function App() {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [selectedMaterialId, setSelectedMaterialId] = useState("");
+  const [selectedTaskId, setSelectedTaskId] = useState("");
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [storageError, setStorageError] = useState("");
   const [session, setSession] = useState<Session | null>(null);
@@ -622,6 +623,7 @@ export function App() {
       setProjects([]);
       setSelectedId("");
       setSelectedMaterialId("");
+      setSelectedTaskId("");
       setIsLoadingProjects(false);
       return;
     }
@@ -672,6 +674,23 @@ export function App() {
     selectedProject?.materials.find((material) => material.id === selectedMaterialId) ??
     selectedProject?.materials[0];
   const selectedTaskItems = selectedProject ? getTaskTreeItems(selectedProject.tasks) : [];
+  const selectedTask = selectedProject?.tasks.find((task) => task.id === selectedTaskId);
+  const selectedTaskSubtasks = selectedProject && selectedTask
+    ? getTaskSiblings(selectedProject.tasks, selectedTask.id)
+    : [];
+  const selectedTaskMaterials = selectedProject && selectedTask
+    ? selectedProject.materials.filter((material) => material.taskId === selectedTask.id)
+    : [];
+
+  useEffect(() => {
+    if (!selectedProject || !selectedTaskId) {
+      return;
+    }
+
+    if (!selectedProject.tasks.some((task) => task.id === selectedTaskId)) {
+      setSelectedTaskId("");
+    }
+  }, [selectedProject, selectedTaskId]);
 
   const filteredProjects = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -727,7 +746,11 @@ export function App() {
     persistProjects(nextProjects, previousProjects);
   }
 
-  function updateProjectTasks(projectId: string, nextTasks: ProjectTask[]) {
+  function updateProjectTasks(
+    projectId: string,
+    nextTasks: ProjectTask[],
+    options: { debounce?: boolean } = {},
+  ) {
     const now = new Date().toISOString();
 
     commitProjects(
@@ -741,6 +764,7 @@ export function App() {
             }
           : project,
       ),
+      options,
     );
   }
 
@@ -857,6 +881,7 @@ export function App() {
     };
 
     updateProjectTasks(project.id, normalizeTaskPositions([...project.tasks, task]));
+    setSelectedTaskId(task.id);
     setNewTaskTitle("");
   }
 
@@ -877,6 +902,20 @@ export function App() {
     );
 
     updateProjectTasks(project.id, nextTasks);
+  }
+
+  function updateTask(
+    project: Project,
+    taskId: string,
+    patch: Partial<ProjectTask>,
+    options: { debounce?: boolean } = {},
+  ) {
+    const now = new Date().toISOString();
+    const nextTasks = project.tasks.map((task) =>
+      task.id === taskId ? { ...task, ...patch, updatedAt: now } : task,
+    );
+
+    updateProjectTasks(project.id, nextTasks, options);
   }
 
   function deleteTask(project: Project, taskId: string) {
@@ -943,12 +982,13 @@ export function App() {
     updateProjectTasks(project.id, normalizeTaskPositions(nextTasks));
   }
 
-  function addMaterial(project: Project) {
+  function addMaterial(project: Project, taskId?: string) {
     const now = new Date().toISOString();
     const material: ProjectMaterial = {
       id: crypto.randomUUID(),
       title: `Материал ${project.materials.length + 1}`,
       markdown: "# Новый материал\n\nНачни писать здесь.",
+      taskId,
       createdAt: now,
       updatedAt: now,
     };
@@ -1009,6 +1049,7 @@ export function App() {
     setProjects([]);
     setSelectedId("");
     setSelectedMaterialId("");
+    setSelectedTaskId("");
     setSaveStatus("idle");
   }
 
@@ -1084,6 +1125,7 @@ export function App() {
               onClick={() => {
                 setSelectedId(project.id);
                 setSelectedMaterialId("");
+                setSelectedTaskId("");
               }}
             >
               <span className="project-icon">{project.icon}</span>
@@ -1228,14 +1270,20 @@ export function App() {
                 {selectedProject.tasks.length ? (
                   selectedTaskItems.map(({ task, depth, siblingIndex, siblingCount }) => (
                     <div
-                      className={task.done ? "task-row done" : "task-row"}
+                      className={[
+                        "task-row",
+                        task.done ? "done" : "",
+                        selectedTaskId === task.id ? "selected" : "",
+                      ].filter(Boolean).join(" ")}
                       key={task.id}
+                      onClick={() => setSelectedTaskId(task.id)}
                       style={{ marginLeft: depth ? `${depth * 20}px` : undefined }}
                     >
                       <label>
                         <input
                           checked={task.done}
                           type="checkbox"
+                          onClick={(event) => event.stopPropagation()}
                           onChange={() => toggleTask(selectedProject, task.id)}
                         />
                         <span>{task.title}</span>
@@ -1244,7 +1292,10 @@ export function App() {
                         <button
                           className="icon-button"
                           type="button"
-                          onClick={() => moveTask(selectedProject, task.id, -1)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            moveTask(selectedProject, task.id, -1);
+                          }}
                           disabled={siblingIndex === 0}
                           title="Выше"
                         >
@@ -1253,7 +1304,10 @@ export function App() {
                         <button
                           className="icon-button"
                           type="button"
-                          onClick={() => moveTask(selectedProject, task.id, 1)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            moveTask(selectedProject, task.id, 1);
+                          }}
                           disabled={siblingIndex === siblingCount - 1}
                           title="Ниже"
                         >
@@ -1262,7 +1316,10 @@ export function App() {
                         <button
                           className="icon-button"
                           type="button"
-                          onClick={() => addSubtask(selectedProject, task.id)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            addSubtask(selectedProject, task.id);
+                          }}
                           title="Добавить подзадачу"
                         >
                           <Plus size={15} />
@@ -1270,7 +1327,10 @@ export function App() {
                         <button
                           className="icon-button danger"
                           type="button"
-                          onClick={() => deleteTask(selectedProject, task.id)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            deleteTask(selectedProject, task.id);
+                          }}
                           title="Удалить задачу"
                         >
                           <Trash2 size={15} />
@@ -1282,6 +1342,165 @@ export function App() {
                   <p className="muted">План пока пуст. Добавь первый конкретный шаг.</p>
                 )}
               </div>
+
+              {selectedTask ? (
+                <div className="task-detail-panel">
+                  <div className="task-detail-header">
+                    <div>
+                      <span className="label">Задача</span>
+                      <h3>{selectedTask.title}</h3>
+                    </div>
+                    <button
+                      className="icon-button"
+                      type="button"
+                      onClick={() => setSelectedTaskId("")}
+                      title="Закрыть"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+
+                  <div className="task-detail-grid">
+                    <label>
+                      Название
+                      <input
+                        value={selectedTask.title}
+                        onChange={(event) =>
+                          updateTask(
+                            selectedProject,
+                            selectedTask.id,
+                            { title: event.target.value },
+                            { debounce: true },
+                          )
+                        }
+                      />
+                    </label>
+                    <label>
+                      Статус
+                      <select
+                        value={selectedTask.done ? "done" : "active"}
+                        onChange={(event) =>
+                          updateTask(selectedProject, selectedTask.id, { done: event.target.value === "done" })
+                        }
+                      >
+                        <option value="active">В работе</option>
+                        <option value="done">Готово</option>
+                      </select>
+                    </label>
+                    <label>
+                      Начало
+                      <input
+                        type="date"
+                        value={selectedTask.startDate ?? ""}
+                        onChange={(event) =>
+                          updateTask(selectedProject, selectedTask.id, { startDate: event.target.value })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Срок
+                      <input
+                        type="date"
+                        value={selectedTask.dueDate ?? ""}
+                        onChange={(event) =>
+                          updateTask(selectedProject, selectedTask.id, { dueDate: event.target.value })
+                        }
+                      />
+                    </label>
+                  </div>
+
+                  <label className="task-description-field">
+                    Описание
+                    <textarea
+                      value={selectedTask.description ?? ""}
+                      onChange={(event) =>
+                        updateTask(
+                          selectedProject,
+                          selectedTask.id,
+                          { description: event.target.value },
+                          { debounce: true },
+                        )
+                      }
+                      placeholder="Контекст, критерии готовности, ссылки"
+                    />
+                  </label>
+
+                  <div className="task-detail-columns">
+                    <div>
+                      <div className="task-detail-subtitle">
+                        <h4>Подзадачи</h4>
+                        <button
+                          className="text-button"
+                          type="button"
+                          onClick={() => addSubtask(selectedProject, selectedTask.id)}
+                        >
+                          <Plus size={15} />
+                          Подзадача
+                        </button>
+                      </div>
+                      <div className="compact-list">
+                        {selectedTaskSubtasks.length ? (
+                          selectedTaskSubtasks.map((task) => (
+                            <button
+                              className="compact-row"
+                              key={task.id}
+                              type="button"
+                              onClick={() => setSelectedTaskId(task.id)}
+                            >
+                              <span>{task.title}</span>
+                              <small>{task.done ? "Готово" : "В работе"}</small>
+                            </button>
+                          ))
+                        ) : (
+                          <p className="muted">У этой задачи пока нет подзадач.</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="task-detail-subtitle">
+                        <h4>Материалы</h4>
+                        <button
+                          className="text-button"
+                          type="button"
+                          onClick={() => addMaterial(selectedProject, selectedTask.id)}
+                        >
+                          <Plus size={15} />
+                          Материал
+                        </button>
+                      </div>
+                      <div className="linked-material-list">
+                        {selectedTaskMaterials.length ? (
+                          selectedTaskMaterials.map((material) => (
+                            <details className="linked-material" key={material.id}>
+                              <summary>
+                                <span>{material.title}</span>
+                                <button
+                                  className="text-button"
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    setSelectedMaterialId(material.id);
+                                  }}
+                                >
+                                  Открыть
+                                </button>
+                              </summary>
+                              <pre>{material.markdown || "Материал пока пуст."}</pre>
+                            </details>
+                          ))
+                        ) : (
+                          <p className="muted">К задаче пока не привязаны материалы.</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : selectedProject.tasks.length ? (
+                <div className="task-detail-empty">
+                  <p>Выбери задачу в списке, чтобы открыть сроки, описание, подзадачи и материалы.</p>
+                </div>
+              ) : null}
             </section>
 
             <section className="section-block materials-section">

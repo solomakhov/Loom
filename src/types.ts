@@ -4,9 +4,12 @@ export type ProjectPriority = "low" | "medium" | "high";
 export type ProjectTask = {
   id: string;
   title: string;
+  description?: string;
   done: boolean;
   parentTaskId?: string;
   position?: number;
+  startDate?: string;
+  dueDate?: string;
   createdAt: string;
   updatedAt: string;
 };

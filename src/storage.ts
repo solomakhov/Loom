@@ -29,8 +29,11 @@ type ProjectTaskRow = {
   project_id: string;
   parent_task_id: string | null;
   title: string;
+  description: string | null;
   done: boolean;
   position: number;
+  start_date: string | null;
+  due_date: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -175,7 +178,10 @@ function normalizeProject(project: Project): Project {
     tasks: Array.isArray(project.tasks)
       ? project.tasks.map((task, index) => ({
           ...task,
+          description: task.description ?? "",
           position: task.position ?? index,
+          startDate: task.startDate ?? "",
+          dueDate: task.dueDate ?? "",
         }))
       : [],
     materials: Array.isArray(project.materials) ? project.materials : [],
@@ -233,9 +239,12 @@ function buildProjectFromRows(
     .map((task) => ({
       id: task.id,
       title: task.title,
+      description: task.description ?? "",
       done: task.done,
       parentTaskId: task.parent_task_id ?? undefined,
       position: task.position,
+      startDate: dateFromDb(task.start_date),
+      dueDate: dateFromDb(task.due_date),
       createdAt: task.created_at,
       updatedAt: task.updated_at,
     }));
@@ -356,7 +365,7 @@ export async function loadProjects(): Promise<Project[]> {
     supabase.from("project_tags").select("project_id,tag"),
     supabase
       .from("project_tasks")
-      .select("id,project_id,parent_task_id,title,done,position,created_at,updated_at"),
+      .select("id,project_id,parent_task_id,title,description,done,position,start_date,due_date,created_at,updated_at"),
     supabase.from("materials").select("id,title,markdown,created_at,updated_at"),
     supabase.from("material_links").select("material_id,project_id,task_id"),
   ]);
@@ -493,8 +502,11 @@ async function saveProjectChildren(projects: Project[], userId: string) {
         project_id: project.id,
         parent_task_id: task.parentTaskId ?? null,
         title: task.title,
+        description: task.description ?? "",
         done: task.done,
         position: task.position ?? index,
+        start_date: emptyToNull(task.startDate ?? ""),
+        due_date: emptyToNull(task.dueDate ?? ""),
         created_at: task.createdAt,
         updated_at: task.updatedAt,
       })),
