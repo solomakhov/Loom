@@ -569,7 +569,7 @@ h3 {
   background: #ffffff;
 }
 
-.task-row label {
+.task-row-main {
   display: flex;
   align-items: center;
   gap: 10px;

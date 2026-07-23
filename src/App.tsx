@@ -1279,7 +1279,7 @@ export function App() {
                       onClick={() => setSelectedTaskId(task.id)}
                       style={{ marginLeft: depth ? `${depth * 20}px` : undefined }}
                     >
-                      <label>
+                      <div className="task-row-main">
                         <input
                           checked={task.done}
                           type="checkbox"
@@ -1287,7 +1287,7 @@ export function App() {
                           onChange={() => toggleTask(selectedProject, task.id)}
                         />
                         <span>{task.title}</span>
-                      </label>
+                      </div>
                       <div className="task-actions">
                         <button
                           className="icon-button"
