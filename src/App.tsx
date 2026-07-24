@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
   ArrowDown,
@@ -8,7 +8,9 @@ import {
   Check,
   CirclePause,
   Clock3,
+  Download,
   Edit3,
+  FileUp,
   FileText,
   Filter,
   Link2,
@@ -18,19 +20,26 @@ import {
   Save,
   Search,
   Trash2,
-  Unlink,
   X,
 } from "lucide-react";
 import { MaterialEditor } from "./MaterialEditor";
-import { loadProjects, saveProjects } from "./storage";
+import {
+  deleteMaterialFile,
+  getMaterialFileUrl,
+  loadWorkspace,
+  saveWorkspace,
+  uploadPdfFile,
+} from "./storage";
 import { isSupabaseConfigured, supabase } from "./supabase";
 import {
+  MaterialLink,
   Project,
   ProjectDraft,
   ProjectMaterial,
   ProjectPriority,
   ProjectStatus,
   ProjectTask,
+  WorkspaceData,
 } from "./types";
 
 const statusLabels: Record<ProjectStatus, string> = {
@@ -104,7 +113,6 @@ function createProject(draft: ProjectDraft): Project {
     icon: draft.icon.trim().slice(0, 2).toUpperCase() || "L",
     progress: 0,
     tasks: [],
-    materials: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -181,10 +189,6 @@ function getTaskTreeItems(tasks: ProjectTask[], parentTaskId?: string, depth = 0
     },
     ...getTaskTreeItems(tasks, task.id, depth + 1),
   ]);
-}
-
-function getTaskSelectLabel(task: ProjectTask, depth: number) {
-  return `${"--".repeat(depth)}${depth ? " " : ""}${task.title}`;
 }
 
 function parseTags(value: string) {
@@ -494,10 +498,80 @@ function PasswordRecoveryPanel({ onComplete }: PasswordRecoveryPanelProps) {
   );
 }
 
+function formatFileSize(value?: number) {
+  if (!value) {
+    return "";
+  }
+
+  if (value < 1024 * 1024) {
+    return `${Math.ceil(value / 1024)} КБ`;
+  }
+
+  return `${(value / 1024 / 1024).toFixed(1)} МБ`;
+}
+
+function PdfMaterialViewer({ material }: { material: ProjectMaterial }) {
+  const [fileUrl, setFileUrl] = useState("");
+  const [fileError, setFileError] = useState("");
+
+  useEffect(() => {
+    let isMounted = true;
+
+    if (!material.filePath) {
+      setFileError("У PDF не указан путь к файлу.");
+      return;
+    }
+
+    setFileUrl("");
+    setFileError("");
+    getMaterialFileUrl(material.filePath)
+      .then((url) => {
+        if (isMounted) {
+          setFileUrl(url);
+        }
+      })
+      .catch((error) => {
+        if (isMounted) {
+          setFileError(`Не удалось открыть PDF: ${getErrorMessage(error)}`);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [material.filePath]);
+
+  return (
+    <div className="pdf-material">
+      <div className="pdf-material-meta">
+        <span>{material.fileName || "PDF-документ"}</span>
+        <span>{formatFileSize(material.fileSize)}</span>
+        {fileUrl ? (
+          <a className="text-button" href={fileUrl} target="_blank" rel="noreferrer">
+            <Download size={15} />
+            Скачать
+          </a>
+        ) : null}
+      </div>
+      {fileError ? <p className="material-file-error">{fileError}</p> : null}
+      {!fileError && !fileUrl ? <p className="muted">Открываем PDF...</p> : null}
+      {fileUrl ? (
+        <iframe
+          className="pdf-frame"
+          src={fileUrl}
+          title={material.title.trim() || material.fileName || "PDF"}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 export function App() {
   const saveTimerRef = useRef<number | null>(null);
-  const latestProjectsRef = useRef<Project[]>([]);
+  const pdfInputRef = useRef<HTMLInputElement | null>(null);
+  const latestWorkspaceRef = useRef<WorkspaceData>({ projects: [], materials: [] });
   const [projects, setProjects] = useState<Project[]>([]);
+  const [materials, setMaterials] = useState<ProjectMaterial[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | "all">("all");
@@ -507,6 +581,9 @@ export function App() {
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [selectedMaterialId, setSelectedMaterialId] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [materialScope, setMaterialScope] = useState<"context" | "all">("context");
+  const [linkingMaterialId, setLinkingMaterialId] = useState("");
+  const [isUploadingPdf, setIsUploadingPdf] = useState(false);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [storageError, setStorageError] = useState("");
   const [session, setSession] = useState<Session | null>(null);
@@ -515,8 +592,8 @@ export function App() {
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(() => isRecoveryUrl());
 
   useEffect(() => {
-    latestProjectsRef.current = projects;
-  }, [projects]);
+    latestWorkspaceRef.current = { projects, materials };
+  }, [projects, materials]);
 
   useEffect(() => {
     if (!supabase) {
@@ -620,7 +697,9 @@ export function App() {
 
   useEffect(() => {
     if (isSupabaseConfigured && !session) {
+      latestWorkspaceRef.current = { projects: [], materials: [] };
       setProjects([]);
+      setMaterials([]);
       setSelectedId("");
       setSelectedMaterialId("");
       setSelectedTaskId("");
@@ -632,14 +711,16 @@ export function App() {
 
     setIsLoadingProjects(true);
 
-    loadProjects()
-      .then((loadedProjects) => {
+    loadWorkspace()
+      .then((loadedWorkspace) => {
         if (!isMounted) {
           return;
         }
 
-        setProjects(loadedProjects);
-        setSelectedId((currentId) => currentId || loadedProjects[0]?.id || "");
+        latestWorkspaceRef.current = loadedWorkspace;
+        setProjects(loadedWorkspace.projects);
+        setMaterials(loadedWorkspace.materials);
+        setSelectedId((currentId) => currentId || loadedWorkspace.projects[0]?.id || "");
         setStorageError("");
         setSaveStatus("saved");
       })
@@ -670,17 +751,27 @@ export function App() {
   }, []);
 
   const selectedProject = projects.find((project) => project.id === selectedId) ?? projects[0];
-  const selectedMaterial =
-    selectedProject?.materials.find((material) => material.id === selectedMaterialId) ??
-    selectedProject?.materials[0];
   const selectedTaskItems = selectedProject ? getTaskTreeItems(selectedProject.tasks) : [];
   const selectedTask = selectedProject?.tasks.find((task) => task.id === selectedTaskId);
   const selectedTaskSubtasks = selectedProject && selectedTask
     ? getTaskSiblings(selectedProject.tasks, selectedTask.id)
     : [];
-  const selectedTaskMaterials = selectedProject && selectedTask
-    ? selectedProject.materials.filter((material) => material.taskId === selectedTask.id)
+  const selectedTaskMaterials = selectedTask
+    ? materials.filter((material) => material.links.some((link) => link.taskId === selectedTask.id))
     : [];
+  const contextualMaterials = materialScope === "all"
+    ? materials
+    : selectedTask
+      ? selectedTaskMaterials
+      : selectedProject
+        ? materials.filter((material) =>
+            material.links.some((link) => link.projectId === selectedProject.id),
+          )
+        : [];
+  const selectedMaterial =
+    contextualMaterials.find((material) => material.id === selectedMaterialId) ??
+    contextualMaterials[0];
+  const linkingMaterial = materials.find((material) => material.id === linkingMaterialId);
 
   useEffect(() => {
     if (!selectedProject || !selectedTaskId) {
@@ -692,6 +783,11 @@ export function App() {
     }
   }, [selectedProject, selectedTaskId]);
 
+  useEffect(() => {
+    setMaterialScope("context");
+    setSelectedMaterialId("");
+  }, [selectedId, selectedTaskId]);
+
   const filteredProjects = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
@@ -702,11 +798,14 @@ export function App() {
     });
   }, [projects, query, statusFilter]);
 
-  async function persistProjects(nextProjects: Project[], previousProjects?: Project[]) {
+  async function persistWorkspace(
+    nextWorkspace: WorkspaceData,
+    previousWorkspace?: WorkspaceData,
+  ) {
     setSaveStatus("saving");
 
     try {
-      await saveProjects(nextProjects);
+      await saveWorkspace(nextWorkspace);
       setStorageError("");
       setSaveStatus("saved");
     } catch (error) {
@@ -717,17 +816,23 @@ export function App() {
       );
       setSaveStatus("error");
 
-      if (previousProjects) {
-        setProjects(previousProjects);
+      if (previousWorkspace) {
+        latestWorkspaceRef.current = previousWorkspace;
+        setProjects(previousWorkspace.projects);
+        setMaterials(previousWorkspace.materials);
       }
     }
   }
 
-  function commitProjects(nextProjects: Project[], options: { debounce?: boolean } = {}) {
-    const previousProjects = latestProjectsRef.current;
+  function commitWorkspace(
+    nextWorkspace: WorkspaceData,
+    options: { debounce?: boolean } = {},
+  ) {
+    const previousWorkspace = latestWorkspaceRef.current;
 
-    latestProjectsRef.current = nextProjects;
-    setProjects(nextProjects);
+    latestWorkspaceRef.current = nextWorkspace;
+    setProjects(nextWorkspace.projects);
+    setMaterials(nextWorkspace.materials);
 
     if (saveTimerRef.current) {
       window.clearTimeout(saveTimerRef.current);
@@ -738,12 +843,22 @@ export function App() {
 
     if (options.debounce) {
       saveTimerRef.current = window.setTimeout(() => {
-        persistProjects(latestProjectsRef.current);
+        persistWorkspace(latestWorkspaceRef.current);
       }, 800);
       return;
     }
 
-    persistProjects(nextProjects, previousProjects);
+    persistWorkspace(nextWorkspace, previousWorkspace);
+  }
+
+  function commitProjects(nextProjects: Project[], options: { debounce?: boolean } = {}) {
+    commitWorkspace(
+      {
+        projects: nextProjects,
+        materials: latestWorkspaceRef.current.materials,
+      },
+      options,
+    );
   }
 
   function updateProjectTasks(
@@ -768,23 +883,15 @@ export function App() {
     );
   }
 
-  function updateProjectMaterials(
-    projectId: string,
+  function updateMaterials(
     nextMaterials: ProjectMaterial[],
     options: { debounce?: boolean } = {},
   ) {
-    const now = new Date().toISOString();
-
-    commitProjects(
-      projects.map((project) =>
-        project.id === projectId
-          ? {
-              ...project,
-              materials: nextMaterials,
-              updatedAt: now,
-            }
-          : project,
-      ),
+    commitWorkspace(
+      {
+        projects: latestWorkspaceRef.current.projects,
+        materials: nextMaterials,
+      },
       options,
     );
   }
@@ -858,7 +965,16 @@ export function App() {
     }
 
     const nextProjects = projects.filter((item) => item.id !== project.id);
-    commitProjects(nextProjects);
+    const projectTaskIds = new Set(project.tasks.map((task) => task.id));
+    const nextMaterials = materials.map((material) => ({
+      ...material,
+      links: material.links.filter(
+        (link) =>
+          link.projectId !== project.id &&
+          (!link.taskId || !projectTaskIds.has(link.taskId)),
+      ),
+    }));
+    commitWorkspace({ projects: nextProjects, materials: nextMaterials });
     setSelectedId(nextProjects[0]?.id ?? "");
   }
 
@@ -926,29 +1042,31 @@ export function App() {
       return;
     }
 
-    const now = new Date().toISOString();
     const nextTasks = normalizeTaskPositions(
       project.tasks.filter((task) => !removedTaskIds.has(task.id)),
     );
-    const nextMaterials = project.materials.map((material) =>
-      material.taskId && removedTaskIds.has(material.taskId)
-        ? { ...material, taskId: undefined, updatedAt: now }
-        : material,
-    );
+    const now = new Date().toISOString();
+    const nextMaterials = materials.map((material) => ({
+      ...material,
+      links: material.links.filter((link) => !link.taskId || !removedTaskIds.has(link.taskId)),
+      updatedAt: material.links.some((link) => link.taskId && removedTaskIds.has(link.taskId))
+        ? now
+        : material.updatedAt,
+    }));
 
-    commitProjects(
-      projects.map((item) =>
+    commitWorkspace({
+      projects: projects.map((item) =>
         item.id === project.id
           ? {
               ...item,
               tasks: nextTasks,
-              materials: nextMaterials,
               progress: calculateProgress(nextTasks),
               updatedAt: now,
             }
           : item,
       ),
-    );
+      materials: nextMaterials,
+    });
   }
 
   function moveTask(project: Project, taskId: string, direction: -1 | 1) {
@@ -982,61 +1100,143 @@ export function App() {
     updateProjectTasks(project.id, normalizeTaskPositions(nextTasks));
   }
 
-  function addMaterial(project: Project, taskId?: string) {
+  function addMaterial(project?: Project, taskId?: string) {
     const now = new Date().toISOString();
     const material: ProjectMaterial = {
       id: crypto.randomUUID(),
-      title: `Материал ${project.materials.length + 1}`,
-      markdown: "# Новый материал\n\nНачни писать здесь.",
-      taskId,
+      title: "",
+      kind: "text",
+      markdown: "",
+      links: taskId ? [{ taskId }] : project ? [{ projectId: project.id }] : [],
       createdAt: now,
       updatedAt: now,
     };
 
-    updateProjectMaterials(project.id, [...project.materials, material]);
+    updateMaterials([...materials, material]);
     setSelectedMaterialId(material.id);
   }
 
-  function updateMaterialMarkdown(project: Project, materialId: string, markdown: string) {
+  function updateMaterialMarkdown(materialId: string, markdown: string) {
     const now = new Date().toISOString();
-    const nextMaterials = project.materials.map((material) =>
+    const nextMaterials = materials.map((material) =>
       material.id === materialId ? { ...material, markdown, updatedAt: now } : material,
     );
 
-    updateProjectMaterials(project.id, nextMaterials, { debounce: true });
+    updateMaterials(nextMaterials, { debounce: true });
   }
 
-  function renameMaterial(project: Project, materialId: string, title: string) {
+  function renameMaterial(materialId: string, title: string) {
     const now = new Date().toISOString();
-    const nextMaterials = project.materials.map((material) =>
+    const nextMaterials = materials.map((material) =>
       material.id === materialId ? { ...material, title, updatedAt: now } : material,
     );
 
-    updateProjectMaterials(project.id, nextMaterials, { debounce: true });
+    updateMaterials(nextMaterials, { debounce: true });
   }
 
-  function linkMaterialToTask(project: Project, materialId: string, taskId: string) {
+  function toggleMaterialLink(materialId: string, link: MaterialLink) {
     const now = new Date().toISOString();
-    const nextMaterials = project.materials.map((material) =>
-      material.id === materialId
-        ? { ...material, taskId: taskId || undefined, updatedAt: now }
-        : material,
-    );
+    const nextMaterials = materials.map((material) => {
+      if (material.id !== materialId) {
+        return material;
+      }
 
-    updateProjectMaterials(project.id, nextMaterials);
+      const hasLink = material.links.some(
+        (item) => item.projectId === link.projectId && item.taskId === link.taskId,
+      );
+
+      return {
+        ...material,
+        links: hasLink
+          ? material.links.filter(
+              (item) => item.projectId !== link.projectId || item.taskId !== link.taskId,
+            )
+          : [...material.links, link],
+        updatedAt: now,
+      };
+    });
+
+    updateMaterials(nextMaterials);
   }
 
-  function deleteMaterial(project: Project, materialId: string) {
-    const material = project.materials.find((item) => item.id === materialId);
+  async function deleteMaterial(materialId: string) {
+    const material = materials.find((item) => item.id === materialId);
 
-    if (!window.confirm(`Удалить материал "${material?.title ?? "Без названия"}"?`)) {
+    const materialLabel = material?.title.trim() || material?.fileName || "Без названия";
+
+    if (!window.confirm(`Удалить материал "${materialLabel}"?`)) {
       return;
     }
 
-    const nextMaterials = project.materials.filter((material) => material.id !== materialId);
+    if (material?.filePath) {
+      try {
+        await deleteMaterialFile(material.filePath);
+      } catch (error) {
+        console.error(error);
+        setStorageError(`Не удалось удалить PDF: ${getErrorMessage(error)}`);
+        return;
+      }
+    }
 
-    updateProjectMaterials(project.id, nextMaterials);
+    const nextMaterials = materials.filter((item) => item.id !== materialId);
+    updateMaterials(nextMaterials);
     setSelectedMaterialId(nextMaterials[0]?.id ?? "");
+  }
+
+  async function handlePdfSelected(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      setStorageError("Можно загрузить только PDF-файл.");
+      return;
+    }
+
+    if (file.size > 20 * 1024 * 1024) {
+      setStorageError("Размер PDF не должен превышать 20 МБ.");
+      return;
+    }
+
+    const materialId = crypto.randomUUID();
+    setIsUploadingPdf(true);
+    setStorageError("");
+
+    try {
+      const filePath = await uploadPdfFile(materialId, file);
+      const now = new Date().toISOString();
+      const links: MaterialLink[] = materialScope === "all"
+        ? []
+        : selectedTask
+          ? [{ taskId: selectedTask.id }]
+          : selectedProject
+            ? [{ projectId: selectedProject.id }]
+            : [];
+      const material: ProjectMaterial = {
+        id: materialId,
+        title: file.name.replace(/\.pdf$/i, ""),
+        kind: "pdf",
+        markdown: "",
+        filePath,
+        fileName: file.name,
+        mimeType: file.type || "application/pdf",
+        fileSize: file.size,
+        links,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      updateMaterials([...latestWorkspaceRef.current.materials, material]);
+      setSelectedMaterialId(material.id);
+    } catch (error) {
+      console.error(error);
+      setStorageError(`Не удалось загрузить PDF: ${getErrorMessage(error)}`);
+    } finally {
+      setIsUploadingPdf(false);
+    }
   }
 
   async function signOut() {
@@ -1046,7 +1246,9 @@ export function App() {
 
     await supabase.auth.signOut();
     clearPasswordRecoveryRequested();
+    latestWorkspaceRef.current = { projects: [], materials: [] };
     setProjects([]);
+    setMaterials([]);
     setSelectedId("");
     setSelectedMaterialId("");
     setSelectedTaskId("");
@@ -1474,7 +1676,7 @@ export function App() {
                           selectedTaskMaterials.map((material) => (
                             <details className="linked-material" key={material.id}>
                               <summary>
-                                <span>{material.title}</span>
+                                <span>{material.title.trim() || material.fileName || "Без названия"}</span>
                                 <button
                                   className="text-button"
                                   type="button"
@@ -1486,7 +1688,15 @@ export function App() {
                                   Открыть
                                 </button>
                               </summary>
-                              <pre>{material.markdown || "Материал пока пуст."}</pre>
+                              {material.kind === "pdf" ? (
+                                <div className="linked-material-file">
+                                  <FileUp size={16} />
+                                  <span>{material.fileName}</span>
+                                  <small>{formatFileSize(material.fileSize)}</small>
+                                </div>
+                              ) : (
+                                <pre>{material.markdown || "Материал пока пуст."}</pre>
+                              )}
                             </details>
                           ))
                         ) : (
@@ -1506,23 +1716,68 @@ export function App() {
             <section className="section-block materials-section">
               <div className="section-title-row">
                 <div>
-                  <h3>Материалы</h3>
-                  <p>Markdown-документы проекта: заметки, планы, ссылки и черновики.</p>
+                  <h3>{selectedTask ? "Материалы задачи" : "Материалы проекта"}</h3>
+                  <p>
+                    {materialScope === "all"
+                      ? "Все документы и PDF, включая материалы без связей."
+                      : selectedTask
+                        ? `Только материалы задачи «${selectedTask.title}».`
+                        : "Только материалы, связанные непосредственно с проектом."}
+                  </p>
                 </div>
-                <button
-                  className="text-button primary"
-                  type="button"
-                  onClick={() => addMaterial(selectedProject)}
-                >
-                  <Plus size={16} />
-                  Документ
-                </button>
+                <div className="material-section-actions">
+                  <div className="segmented-control" aria-label="Область материалов">
+                    <button
+                      className={materialScope === "context" ? "selected" : ""}
+                      type="button"
+                      onClick={() => setMaterialScope("context")}
+                    >
+                      {selectedTask ? "Задача" : "Проект"}
+                    </button>
+                    <button
+                      className={materialScope === "all" ? "selected" : ""}
+                      type="button"
+                      onClick={() => setMaterialScope("all")}
+                    >
+                      Все
+                    </button>
+                  </div>
+                  <button
+                    className="text-button"
+                    type="button"
+                    onClick={() =>
+                      addMaterial(
+                        materialScope === "all" ? undefined : selectedProject,
+                        materialScope === "context" ? selectedTask?.id : undefined,
+                      )
+                    }
+                  >
+                    <Plus size={16} />
+                    Документ
+                  </button>
+                  <button
+                    className="text-button primary"
+                    type="button"
+                    onClick={() => pdfInputRef.current?.click()}
+                    disabled={isUploadingPdf}
+                  >
+                    <FileUp size={16} />
+                    {isUploadingPdf ? "Загрузка..." : "PDF"}
+                  </button>
+                  <input
+                    ref={pdfInputRef}
+                    className="visually-hidden"
+                    type="file"
+                    accept="application/pdf,.pdf"
+                    onChange={handlePdfSelected}
+                  />
+                </div>
               </div>
 
               <div className="materials-layout">
-                <div className="material-list" aria-label="Материалы проекта">
-                  {selectedProject.materials.length ? (
-                    selectedProject.materials.map((material) => (
+                <div className="material-list" aria-label="Материалы">
+                  {contextualMaterials.length ? (
+                    contextualMaterials.map((material) => (
                       <button
                         className={
                           selectedMaterial?.id === material.id ? "material-row selected" : "material-row"
@@ -1531,22 +1786,29 @@ export function App() {
                         type="button"
                         onClick={() => setSelectedMaterialId(material.id)}
                       >
-                        <FileText size={16} />
+                        {material.kind === "pdf" ? <FileUp size={16} /> : <FileText size={16} />}
                         <span className="material-row-copy">
-                          <span>{material.title}</span>
-                          {material.taskId ? (
-                            <small>
-                              {selectedProject.tasks.find((task) => task.id === material.taskId)?.title ??
-                                "Задача"}
-                            </small>
-                          ) : (
-                            <small>Проект</small>
-                          )}
+                          <span>{material.title.trim() || material.fileName || "Без названия"}</span>
+                          <small>
+                            {materialScope === "all"
+                              ? material.links.length
+                                ? `${material.links.length} связ.`
+                                : "Без связей"
+                              : material.kind === "pdf"
+                                ? `PDF${material.fileSize ? ` · ${formatFileSize(material.fileSize)}` : ""}`
+                                : "Документ"}
+                          </small>
                         </span>
                       </button>
                     ))
                   ) : (
-                    <p className="muted">Пока нет материалов.</p>
+                    <p className="muted">
+                      {materialScope === "all"
+                        ? "Пока нет материалов."
+                        : selectedTask
+                          ? "К этой задаче материалы не привязаны."
+                          : "К проекту материалы не привязаны."}
+                    </p>
                   )}
                 </div>
 
@@ -1556,65 +1818,65 @@ export function App() {
                       <div className="material-title-row">
                         <input
                           value={selectedMaterial.title}
-                          onChange={(event) =>
-                            renameMaterial(selectedProject, selectedMaterial.id, event.target.value)
-                          }
+                          onChange={(event) => renameMaterial(selectedMaterial.id, event.target.value)}
                           aria-label="Название материала"
+                          placeholder="Без названия"
                         />
+                        <button
+                          className="icon-button"
+                          type="button"
+                          onClick={() => setLinkingMaterialId(selectedMaterial.id)}
+                          title="Изменить связи"
+                        >
+                          <Link2 size={16} />
+                        </button>
                         <button
                           className="icon-button danger"
                           type="button"
-                          onClick={() => deleteMaterial(selectedProject, selectedMaterial.id)}
+                          onClick={() => deleteMaterial(selectedMaterial.id)}
                           title="Удалить материал"
                         >
                           <Trash2 size={16} />
                         </button>
                       </div>
-                      <div className="material-link-row">
-                        <label>
-                          <Link2 size={15} />
-                          <select
-                            value={selectedMaterial.taskId ?? ""}
-                            onChange={(event) =>
-                              linkMaterialToTask(selectedProject, selectedMaterial.id, event.target.value)
-                            }
-                            aria-label="Привязка материала"
-                          >
-                            <option value="">Проект целиком</option>
-                            {selectedTaskItems.map(({ task, depth }) => (
-                              <option key={task.id} value={task.id}>
-                                {getTaskSelectLabel(task, depth)}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        {selectedMaterial.taskId ? (
-                          <button
-                            className="icon-button"
-                            type="button"
-                            onClick={() => linkMaterialToTask(selectedProject, selectedMaterial.id, "")}
-                            title="Отвязать от задачи"
-                          >
-                            <Unlink size={15} />
-                          </button>
-                        ) : null}
-                      </div>
-                      <MaterialEditor
-                        key={selectedMaterial.id}
-                        markdown={selectedMaterial.markdown}
-                        onChange={(markdown) =>
-                          updateMaterialMarkdown(selectedProject, selectedMaterial.id, markdown)
-                        }
-                      />
+                      <button
+                        className="material-link-summary"
+                        type="button"
+                        onClick={() => setLinkingMaterialId(selectedMaterial.id)}
+                      >
+                        <Link2 size={15} />
+                        {selectedMaterial.links.length
+                          ? `Связи: ${selectedMaterial.links.length}`
+                          : "Материал без связей"}
+                      </button>
+                      {selectedMaterial.kind === "pdf" ? (
+                        <PdfMaterialViewer material={selectedMaterial} />
+                      ) : (
+                        <MaterialEditor
+                          key={selectedMaterial.id}
+                          markdown={selectedMaterial.markdown}
+                          onChange={(markdown) =>
+                            updateMaterialMarkdown(selectedMaterial.id, markdown)
+                          }
+                        />
+                      )}
                     </>
                   ) : (
                     <div className="material-empty">
-                      <h3>Создай первый материал</h3>
-                      <p>Он будет храниться как Markdown и останется связанным с проектом.</p>
+                      <h3>Здесь пока пусто</h3>
+                      <p>
+                        Создай документ или загрузи PDF. Связи с проектами и задачами можно
+                        изменить позже.
+                      </p>
                       <button
                         className="text-button primary"
                         type="button"
-                        onClick={() => addMaterial(selectedProject)}
+                        onClick={() =>
+                          addMaterial(
+                            materialScope === "all" ? undefined : selectedProject,
+                            materialScope === "context" ? selectedTask?.id : undefined,
+                          )
+                        }
                       >
                         <Plus size={16} />
                         Новый документ
@@ -1636,6 +1898,89 @@ export function App() {
           </div>
         )}
       </section>
+
+      {linkingMaterial ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setLinkingMaterialId("");
+            }
+          }}
+        >
+          <section
+            className="modal-panel material-links-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="material-links-title"
+          >
+            <div className="form-header">
+              <div>
+                <p className="eyebrow">Материал</p>
+                <h2 id="material-links-title">Связи</h2>
+                <p>{linkingMaterial.title.trim() || linkingMaterial.fileName || "Без названия"}</p>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => setLinkingMaterialId("")}
+                title="Закрыть"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="material-link-targets">
+              {projects.map((project) => (
+                <div className="material-link-project" key={project.id}>
+                  <label className="material-link-option project-link-option">
+                    <input
+                      type="checkbox"
+                      checked={linkingMaterial.links.some((link) => link.projectId === project.id)}
+                      onChange={() =>
+                        toggleMaterialLink(linkingMaterial.id, { projectId: project.id })
+                      }
+                    />
+                    <span>{project.title}</span>
+                    <small>Проект</small>
+                  </label>
+                  {getTaskTreeItems(project.tasks).map(({ task, depth }) => (
+                    <label
+                      className="material-link-option"
+                      key={task.id}
+                      style={{ paddingLeft: `${28 + depth * 18}px` }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={linkingMaterial.links.some((link) => link.taskId === task.id)}
+                        onChange={() => toggleMaterialLink(linkingMaterial.id, { taskId: task.id })}
+                      />
+                      <span>{task.title}</span>
+                      <small>Задача</small>
+                    </label>
+                  ))}
+                </div>
+              ))}
+            </div>
+
+            <div className="form-actions">
+              <span className="muted">
+                {linkingMaterial.links.length
+                  ? `Выбрано связей: ${linkingMaterial.links.length}`
+                  : "Материал останется свободным"}
+              </span>
+              <button
+                className="text-button primary"
+                type="button"
+                onClick={() => setLinkingMaterialId("")}
+              >
+                Готово
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {isFormOpen ? (
         <div className="modal-backdrop" role="presentation">

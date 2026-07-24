@@ -1,9 +1,19 @@
 import { supabase } from "./supabase";
-import { Project, ProjectPriority, ProjectStatus, ProjectTask } from "./types";
+import {
+  MaterialLink,
+  Project,
+  ProjectMaterial,
+  ProjectPriority,
+  ProjectStatus,
+  ProjectTask,
+  WorkspaceData,
+} from "./types";
 
-const STORAGE_KEY = "loom.projects.v1";
+const STORAGE_KEY = "loom.workspace.v2";
+const LEGACY_STORAGE_KEY = "loom.projects.v1";
 const SUPABASE_PROJECTS_TABLE = "projects";
 const EMPTY_PROJECT_ID = "__empty__";
+export const MATERIALS_BUCKET = "materials";
 
 type ProjectRow = {
   id: string;
@@ -41,7 +51,12 @@ type ProjectTaskRow = {
 type MaterialRow = {
   id: string;
   title: string;
+  kind: "text" | "pdf";
   markdown: string;
+  file_path: string | null;
+  file_name: string | null;
+  mime_type: string | null;
+  file_size: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -55,11 +70,19 @@ type MaterialLinkRow = {
 let loadedMaterialIds = new Set<string>();
 let loadedProjectIds = new Set<string>();
 
+type LegacyMaterial = Omit<ProjectMaterial, "kind" | "links"> & {
+  taskId?: string;
+};
+
+type LegacyProject = Project & {
+  materials?: LegacyMaterial[];
+};
+
 function emptyToNull(value: string) {
   return value.trim() || null;
 }
 
-const seedProjects: Project[] = [
+const seedProjects: LegacyProject[] = [
   {
     id: "loom-mvp",
     title: "Loom MVP",
@@ -184,7 +207,6 @@ function normalizeProject(project: Project): Project {
           dueDate: task.dueDate ?? "",
         }))
       : [],
-    materials: Array.isArray(project.materials) ? project.materials : [],
   };
 
   return {
@@ -205,31 +227,7 @@ function buildProjectFromRows(
   projectRow: ProjectRow,
   tagRows: ProjectTagRow[],
   taskRows: ProjectTaskRow[],
-  materialRows: MaterialRow[],
-  materialLinkRows: MaterialLinkRow[],
 ): Project {
-  const projectTaskRows = taskRows.filter((task) => task.project_id === projectRow.id);
-  const projectTaskIds = new Set(projectTaskRows.map((task) => task.id));
-  const projectMaterialLinks = materialLinkRows.filter(
-    (link) => link.project_id === projectRow.id || (link.task_id && projectTaskIds.has(link.task_id)),
-  );
-
-  const projectMaterials = materialLinkRows
-    .filter((link) => projectMaterialLinks.includes(link))
-    .map((link) => materialRows.find((material) => material.id === link.material_id))
-    .filter((material): material is MaterialRow => Boolean(material))
-    .filter((material, index, materials) => materials.findIndex((item) => item.id === material.id) === index)
-    .map((material) => ({
-      id: material.id,
-      title: material.title,
-      markdown: material.markdown,
-      taskId: projectMaterialLinks.find(
-        (link) => link.material_id === material.id && link.task_id && projectTaskIds.has(link.task_id),
-      )?.task_id ?? undefined,
-      createdAt: material.created_at,
-      updatedAt: material.updated_at,
-    }));
-
   const tasks: ProjectTask[] = taskRows
     .filter((task) => task.project_id === projectRow.id)
     .sort((a, b) => {
@@ -263,10 +261,33 @@ function buildProjectFromRows(
     icon: projectRow.icon ?? projectRow.data?.icon ?? "L",
     progress: 0,
     tasks,
-    materials: projectMaterials,
     createdAt: timestampFromDb(projectRow.created_at) || projectRow.data?.createdAt || new Date().toISOString(),
     updatedAt: timestampFromDb(projectRow.updated_at) || projectRow.data?.updatedAt || new Date().toISOString(),
   });
+}
+
+function buildMaterialsFromRows(
+  materialRows: MaterialRow[],
+  materialLinkRows: MaterialLinkRow[],
+): ProjectMaterial[] {
+  return materialRows.map((material) => ({
+    id: material.id,
+    title: material.title,
+    kind: material.kind ?? "text",
+    markdown: material.markdown ?? "",
+    filePath: material.file_path ?? undefined,
+    fileName: material.file_name ?? undefined,
+    mimeType: material.mime_type ?? undefined,
+    fileSize: material.file_size ?? undefined,
+    links: materialLinkRows
+      .filter((link) => link.material_id === material.id)
+      .map((link) => ({
+        projectId: link.project_id ?? undefined,
+        taskId: link.task_id ?? undefined,
+      })),
+    createdAt: material.created_at,
+    updatedAt: material.updated_at,
+  }));
 }
 
 function uniqueById<T extends { id: string }>(items: T[]) {
@@ -294,44 +315,100 @@ async function getCurrentUserId() {
   return user.id;
 }
 
-function loadProjectsFromLocalStorage(): Project[] {
-  const raw = window.localStorage.getItem(STORAGE_KEY);
+function migrateLegacyProjects(legacyProjects: LegacyProject[]): WorkspaceData {
+  const materials = new Map<string, ProjectMaterial>();
+  const projects = legacyProjects.map((legacyProject) => {
+    const { materials: legacyMaterials = [], ...project } = legacyProject;
 
-  if (!raw) {
-    saveProjectsToLocalStorage(seedProjects);
-    return seedProjects;
-  }
+    legacyMaterials.forEach((legacyMaterial) => {
+      const link: MaterialLink = legacyMaterial.taskId
+        ? { taskId: legacyMaterial.taskId }
+        : { projectId: project.id };
+      const existingMaterial = materials.get(legacyMaterial.id);
 
-  try {
-    const projects = JSON.parse(raw);
-    return Array.isArray(projects) ? projects.map(normalizeProject) : seedProjects;
-  } catch {
-    return seedProjects;
-  }
+      if (existingMaterial) {
+        existingMaterial.links.push(link);
+        return;
+      }
+
+      const { taskId: _taskId, ...material } = legacyMaterial;
+      materials.set(legacyMaterial.id, {
+        ...material,
+        kind: "text",
+        links: [link],
+      });
+    });
+
+    return normalizeProject(project);
+  });
+
+  return {
+    projects,
+    materials: Array.from(materials.values()),
+  };
 }
 
-function loadExistingProjectsFromLocalStorage(): Project[] | null {
+function normalizeWorkspace(workspace: WorkspaceData): WorkspaceData {
+  return {
+    projects: Array.isArray(workspace.projects) ? workspace.projects.map(normalizeProject) : [],
+    materials: Array.isArray(workspace.materials)
+      ? workspace.materials.map((material) => ({
+          ...material,
+          kind: material.kind ?? "text",
+          markdown: material.markdown ?? "",
+          links: Array.isArray(material.links) ? material.links : [],
+        }))
+      : [],
+  };
+}
+
+function loadWorkspaceFromLocalStorage(): WorkspaceData {
   const raw = window.localStorage.getItem(STORAGE_KEY);
 
-  if (!raw) {
+  if (raw) {
+    try {
+      return normalizeWorkspace(JSON.parse(raw) as WorkspaceData);
+    } catch {
+      // Try the legacy project-only format below.
+    }
+  }
+
+  const legacyRaw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+
+  if (legacyRaw) {
+    try {
+      const legacyProjects = JSON.parse(legacyRaw);
+
+      if (Array.isArray(legacyProjects)) {
+        const workspace = migrateLegacyProjects(legacyProjects);
+        saveWorkspaceToLocalStorage(workspace);
+        return workspace;
+      }
+    } catch {
+      // Fall back to the sample workspace.
+    }
+  }
+
+  const workspace = migrateLegacyProjects(seedProjects);
+  saveWorkspaceToLocalStorage(workspace);
+  return workspace;
+}
+
+function loadExistingWorkspaceFromLocalStorage(): WorkspaceData | null {
+  if (!window.localStorage.getItem(STORAGE_KEY) && !window.localStorage.getItem(LEGACY_STORAGE_KEY)) {
     return null;
   }
 
-  try {
-    const projects = JSON.parse(raw);
-    return Array.isArray(projects) ? projects.map(normalizeProject) : null;
-  } catch {
-    return null;
-  }
+  return loadWorkspaceFromLocalStorage();
 }
 
-function saveProjectsToLocalStorage(projects: Project[]) {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+function saveWorkspaceToLocalStorage(workspace: WorkspaceData) {
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace));
 }
 
-export async function loadProjects(): Promise<Project[]> {
+export async function loadWorkspace(): Promise<WorkspaceData> {
   if (!supabase) {
-    return loadProjectsFromLocalStorage();
+    return loadWorkspaceFromLocalStorage();
   }
 
   const { data: projectRows, error: projectsError } = await supabase
@@ -346,14 +423,12 @@ export async function loadProjects(): Promise<Project[]> {
   const projects = (projectRows ?? []) as ProjectRow[];
 
   if (!projects.length) {
-    const localProjects = loadExistingProjectsFromLocalStorage();
+    const localWorkspace = loadExistingWorkspaceFromLocalStorage();
 
-    if (localProjects?.length) {
-      await saveProjects(localProjects);
-      return localProjects;
+    if (localWorkspace?.projects.length || localWorkspace?.materials.length) {
+      await saveWorkspace(localWorkspace);
+      return localWorkspace;
     }
-
-    return [];
   }
 
   const [
@@ -366,7 +441,9 @@ export async function loadProjects(): Promise<Project[]> {
     supabase
       .from("project_tasks")
       .select("id,project_id,parent_task_id,title,description,done,position,start_date,due_date,created_at,updated_at"),
-    supabase.from("materials").select("id,title,markdown,created_at,updated_at"),
+    supabase
+      .from("materials")
+      .select("id,title,kind,markdown,file_path,file_name,mime_type,file_size,created_at,updated_at"),
     supabase.from("material_links").select("material_id,project_id,task_id"),
   ]);
 
@@ -388,33 +465,33 @@ export async function loadProjects(): Promise<Project[]> {
 
   loadedProjectIds = new Set(projects.map((project) => project.id));
 
-  const loadedTaskIds = new Set(((taskRows ?? []) as ProjectTaskRow[]).map((task) => task.id));
-  loadedMaterialIds = new Set(
-    ((materialLinkRows ?? []) as MaterialLinkRow[])
-      .filter((link) => link.project_id || (link.task_id && loadedTaskIds.has(link.task_id)))
-      .map((link) => link.material_id),
-  );
+  loadedMaterialIds = new Set(((materialRows ?? []) as MaterialRow[]).map((material) => material.id));
 
-  return projects.map((project) =>
-    buildProjectFromRows(
-      project,
-      (tagRows ?? []) as ProjectTagRow[],
-      (taskRows ?? []) as ProjectTaskRow[],
+  return {
+    projects: projects.map((project) =>
+      buildProjectFromRows(
+        project,
+        (tagRows ?? []) as ProjectTagRow[],
+        (taskRows ?? []) as ProjectTaskRow[],
+      ),
+    ),
+    materials: buildMaterialsFromRows(
       (materialRows ?? []) as MaterialRow[],
       (materialLinkRows ?? []) as MaterialLinkRow[],
     ),
-  );
+  };
 }
 
-export async function saveProjects(projects: Project[]) {
-  saveProjectsToLocalStorage(projects);
+export async function saveWorkspace(workspace: WorkspaceData) {
+  saveWorkspaceToLocalStorage(workspace);
 
   if (!supabase) {
     return;
   }
 
   const userId = await getCurrentUserId();
-  const normalizedProjects = projects.map(normalizeProject);
+  const normalizedProjects = workspace.projects.map(normalizeProject);
+  const normalizedMaterials = normalizeWorkspace(workspace).materials;
   const projectRows = normalizedProjects.map((project) => ({
     id: project.id,
     user_id: userId,
@@ -455,13 +532,12 @@ export async function saveProjects(projects: Project[]) {
       }
     }
 
-    await saveProjectChildren(normalizedProjects, userId);
+    await saveProjectChildren(normalizedProjects, normalizedMaterials, userId);
     loadedProjectIds = currentProjectIds;
     return;
   }
 
-  const currentMaterialIds = new Set<string>();
-  await deleteLoadedMissingMaterials(currentMaterialIds);
+  await saveMaterials(normalizedMaterials, userId);
 
   const { error } = await supabase
     .from(SUPABASE_PROJECTS_TABLE)
@@ -475,7 +551,11 @@ export async function saveProjects(projects: Project[]) {
   loadedProjectIds = new Set();
 }
 
-async function saveProjectChildren(projects: Project[], userId: string) {
+async function saveProjectChildren(
+  projects: Project[],
+  materials: ProjectMaterial[],
+  userId: string,
+) {
   if (!supabase) {
     return;
   }
@@ -513,32 +593,7 @@ async function saveProjectChildren(projects: Project[], userId: string) {
     )
     .sort((a, b) => Number(Boolean(a.parent_task_id)) - Number(Boolean(b.parent_task_id)));
 
-  const materialRows = uniqueById(
-    projects.flatMap((project) =>
-      project.materials.map((material) => ({
-        id: material.id,
-        user_id: userId,
-        title: material.title,
-        markdown: material.markdown,
-        created_at: material.createdAt,
-        updated_at: material.updatedAt,
-      })),
-    ),
-  );
-
-  const materialLinkRows = projects.flatMap((project) =>
-    project.materials.map((material) => ({
-      material_id: material.id,
-      user_id: userId,
-      project_id: material.taskId ? null : project.id,
-      task_id: material.taskId ?? null,
-    })),
-  );
-
-  const currentMaterialIds = new Set(materialRows.map((material) => material.id));
-
   await deleteRowsForProjects("project_tags", projectIds);
-  await deleteMaterialLinksForProjects(projectIds, taskRows.map((task) => task.id));
 
   if (tagRows.length) {
     const { error } = await supabase.from("project_tags").insert(tagRows);
@@ -559,6 +614,48 @@ async function saveProjectChildren(projects: Project[], userId: string) {
   }
 
   await deleteMissingRows("project_tasks", "id", taskRows.map((task) => task.id), projectIds);
+
+  await saveMaterials(materials, userId);
+}
+
+async function saveMaterials(materials: ProjectMaterial[], userId: string) {
+  if (!supabase) {
+    return;
+  }
+
+  const materialRows = uniqueById(
+    materials.map((material) => ({
+      id: material.id,
+      user_id: userId,
+      title: material.title,
+      kind: material.kind,
+      markdown: material.markdown,
+      file_path: material.filePath ?? null,
+      file_name: material.fileName ?? null,
+      mime_type: material.mimeType ?? null,
+      file_size: material.fileSize ?? null,
+      created_at: material.createdAt,
+      updated_at: material.updatedAt,
+    })),
+  );
+  const materialLinkRows = materials.flatMap((material) =>
+    material.links.map((link) => ({
+      material_id: material.id,
+      user_id: userId,
+      project_id: link.projectId ?? null,
+      task_id: link.taskId ?? null,
+    })),
+  );
+  const currentMaterialIds = new Set(materialRows.map((material) => material.id));
+
+  const { error: linkDeleteError } = await supabase
+    .from("material_links")
+    .delete()
+    .neq("material_id", EMPTY_PROJECT_ID);
+
+  if (linkDeleteError) {
+    throw linkDeleteError;
+  }
 
   if (materialRows.length) {
     const { error } = await supabase
@@ -591,34 +688,6 @@ async function deleteRowsForProjects(tableName: string, projectIds: string[]) {
 
   if (error) {
     throw error;
-  }
-}
-
-async function deleteMaterialLinksForProjects(projectIds: string[], taskIds: string[]) {
-  if (!supabase || !projectIds.length) {
-    return;
-  }
-
-  const { error: projectLinkError } = await supabase
-    .from("material_links")
-    .delete()
-    .in("project_id", projectIds);
-
-  if (projectLinkError) {
-    throw projectLinkError;
-  }
-
-  if (!taskIds.length) {
-    return;
-  }
-
-  const { error: taskLinkError } = await supabase
-    .from("material_links")
-    .delete()
-    .in("task_id", taskIds);
-
-  if (taskLinkError) {
-    throw taskLinkError;
   }
 }
 
@@ -672,6 +741,55 @@ async function deleteLoadedMissingMaterials(currentMaterialIds: Set<string>) {
   }
 
   const { error } = await supabase.from("materials").delete().in("id", removedMaterialIds);
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function uploadPdfFile(materialId: string, file: File) {
+  if (!supabase) {
+    throw new Error("Для загрузки PDF требуется подключение к Supabase.");
+  }
+
+  const userId = await getCurrentUserId();
+  const filePath = `${userId}/${materialId}.pdf`;
+  const { error } = await supabase.storage
+    .from(MATERIALS_BUCKET)
+    .upload(filePath, file, {
+      contentType: "application/pdf",
+      upsert: false,
+    });
+
+  if (error) {
+    throw error;
+  }
+
+  return filePath;
+}
+
+export async function getMaterialFileUrl(filePath: string) {
+  if (!supabase) {
+    return "";
+  }
+
+  const { data, error } = await supabase.storage
+    .from(MATERIALS_BUCKET)
+    .createSignedUrl(filePath, 60 * 60);
+
+  if (error) {
+    throw error;
+  }
+
+  return data.signedUrl;
+}
+
+export async function deleteMaterialFile(filePath: string) {
+  if (!supabase) {
+    return;
+  }
+
+  const { error } = await supabase.storage.from(MATERIALS_BUCKET).remove([filePath]);
 
   if (error) {
     throw error;

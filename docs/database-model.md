@@ -106,11 +106,17 @@ Key columns:
 - `id`
 - `user_id`
 - `title`
+- `kind` (`text` or `pdf`)
 - `markdown`
+- `file_path`
+- `file_name`
+- `mime_type`
+- `file_size`
 - `created_at`
 - `updated_at`
 
 Materials do not directly belong to a single project or task. This is required for multiple links and free materials.
+PDF binaries are stored in the private Supabase Storage bucket `materials`; the table contains only file metadata.
 
 ### `material_links`
 
@@ -169,17 +175,14 @@ The frontend storage layer now:
 2. Reads tags from `project_tags`.
 3. Reads tasks from `project_tasks`.
 4. Reads materials from `materials`.
-5. Reads project-material relationships from `material_links`.
+5. Reads all material relationships from `material_links`.
 6. Writes updates back into those normalized tables.
 7. Still writes `projects.data` as a legacy backup.
+8. Keeps materials in a workspace-level catalog, so unlinked materials survive reloads.
+9. Supports multiple project/task links through a dedicated link dialog.
+10. Uploads PDF files to the private `materials` bucket.
 
-Next implementation steps:
-
-1. Render nested tasks using `ProjectTask.parentTaskId`.
-2. Add task reordering using `ProjectTask.position`.
-3. Add material link/unlink UI.
-4. Add free-material view.
-5. Remove dependency on `projects.data` after production data is verified.
+The remaining compatibility step is to remove dependency on `projects.data` after production data is verified.
 
 ## Operational Rule
 

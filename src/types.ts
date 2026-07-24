@@ -14,11 +14,23 @@ export type ProjectTask = {
   updatedAt: string;
 };
 
+export type MaterialKind = "text" | "pdf";
+
+export type MaterialLink = {
+  projectId?: string;
+  taskId?: string;
+};
+
 export type ProjectMaterial = {
   id: string;
   title: string;
+  kind: MaterialKind;
   markdown: string;
-  taskId?: string;
+  filePath?: string;
+  fileName?: string;
+  mimeType?: string;
+  fileSize?: number;
+  links: MaterialLink[];
   createdAt: string;
   updatedAt: string;
 };
@@ -35,9 +47,13 @@ export type Project = {
   icon: string;
   progress: number;
   tasks: ProjectTask[];
-  materials: ProjectMaterial[];
   createdAt: string;
   updatedAt: string;
+};
+
+export type WorkspaceData = {
+  projects: Project[];
+  materials: ProjectMaterial[];
 };
 
 export type ProjectDraft = {
