@@ -6,6 +6,8 @@ import {
   Archive,
   CalendarDays,
   Check,
+  ChevronDown,
+  ChevronRight,
   CirclePause,
   Clock3,
   Download,
@@ -583,6 +585,9 @@ export function App() {
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [materialScope, setMaterialScope] = useState<"context" | "all">("context");
   const [linkingMaterialId, setLinkingMaterialId] = useState("");
+  const [expandedMaterialLinkProjectIds, setExpandedMaterialLinkProjectIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [storageError, setStorageError] = useState("");
@@ -1157,6 +1162,32 @@ export function App() {
     });
 
     updateMaterials(nextMaterials);
+  }
+
+  function openMaterialLinks(material: ProjectMaterial) {
+    const linkedTaskIds = new Set(
+      material.links.flatMap((link) => (link.taskId ? [link.taskId] : [])),
+    );
+    const projectIdsWithLinkedTasks = projects
+      .filter((project) => project.tasks.some((task) => linkedTaskIds.has(task.id)))
+      .map((project) => project.id);
+
+    setExpandedMaterialLinkProjectIds(new Set(projectIdsWithLinkedTasks));
+    setLinkingMaterialId(material.id);
+  }
+
+  function toggleMaterialLinkProject(projectId: string) {
+    setExpandedMaterialLinkProjectIds((currentProjectIds) => {
+      const nextProjectIds = new Set(currentProjectIds);
+
+      if (nextProjectIds.has(projectId)) {
+        nextProjectIds.delete(projectId);
+      } else {
+        nextProjectIds.add(projectId);
+      }
+
+      return nextProjectIds;
+    });
   }
 
   async function deleteMaterial(materialId: string) {
@@ -1825,7 +1856,7 @@ export function App() {
                         <button
                           className="icon-button"
                           type="button"
-                          onClick={() => setLinkingMaterialId(selectedMaterial.id)}
+                          onClick={() => openMaterialLinks(selectedMaterial)}
                           title="Изменить связи"
                         >
                           <Link2 size={16} />
@@ -1842,7 +1873,7 @@ export function App() {
                       <button
                         className="material-link-summary"
                         type="button"
-                        onClick={() => setLinkingMaterialId(selectedMaterial.id)}
+                        onClick={() => openMaterialLinks(selectedMaterial)}
                       >
                         <Link2 size={15} />
                         {selectedMaterial.links.length
@@ -1932,36 +1963,62 @@ export function App() {
             </div>
 
             <div className="material-link-targets">
-              {projects.map((project) => (
-                <div className="material-link-project" key={project.id}>
-                  <label className="material-link-option project-link-option">
-                    <input
-                      type="checkbox"
-                      checked={linkingMaterial.links.some((link) => link.projectId === project.id)}
-                      onChange={() =>
-                        toggleMaterialLink(linkingMaterial.id, { projectId: project.id })
-                      }
-                    />
-                    <span>{project.title}</span>
-                    <small>Проект</small>
-                  </label>
-                  {getTaskTreeItems(project.tasks).map(({ task, depth }) => (
-                    <label
-                      className="material-link-option"
-                      key={task.id}
-                      style={{ paddingLeft: `${28 + depth * 18}px` }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={linkingMaterial.links.some((link) => link.taskId === task.id)}
-                        onChange={() => toggleMaterialLink(linkingMaterial.id, { taskId: task.id })}
-                      />
-                      <span>{task.title}</span>
-                      <small>Задача</small>
-                    </label>
-                  ))}
-                </div>
-              ))}
+              {projects.map((project) => {
+                const isExpanded = expandedMaterialLinkProjectIds.has(project.id);
+                const taskItems = getTaskTreeItems(project.tasks);
+
+                return (
+                  <div className="material-link-project" key={project.id}>
+                    <div className="project-link-row">
+                      <label className="material-link-option project-link-option">
+                        <input
+                          type="checkbox"
+                          checked={linkingMaterial.links.some(
+                            (link) => link.projectId === project.id,
+                          )}
+                          onChange={() =>
+                            toggleMaterialLink(linkingMaterial.id, { projectId: project.id })
+                          }
+                        />
+                        <span>{project.title}</span>
+                        <small>Проект</small>
+                      </label>
+                      {taskItems.length ? (
+                        <button
+                          className="project-tasks-toggle"
+                          type="button"
+                          aria-expanded={isExpanded}
+                          aria-label={`${isExpanded ? "Скрыть" : "Показать"} задачи проекта «${project.title}»`}
+                          title={`${isExpanded ? "Скрыть" : "Показать"} задачи (${taskItems.length})`}
+                          onClick={() => toggleMaterialLinkProject(project.id)}
+                        >
+                          <span>{taskItems.length}</span>
+                          {isExpanded ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
+                        </button>
+                      ) : null}
+                    </div>
+                    {isExpanded
+                      ? taskItems.map(({ task, depth }) => (
+                          <label
+                            className="material-link-option"
+                            key={task.id}
+                            style={{ paddingLeft: `${28 + depth * 18}px` }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={linkingMaterial.links.some((link) => link.taskId === task.id)}
+                              onChange={() =>
+                                toggleMaterialLink(linkingMaterial.id, { taskId: task.id })
+                              }
+                            />
+                            <span>{task.title}</span>
+                            <small>Задача</small>
+                          </label>
+                        ))
+                      : null}
+                  </div>
+                );
+              })}
             </div>
 
             <div className="form-actions">

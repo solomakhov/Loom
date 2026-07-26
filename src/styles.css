@@ -1146,6 +1146,12 @@ h3 {
   border-radius: 8px;
 }
 
+.project-link-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  background: #f1f5f1;
+}
+
 .material-link-option {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) auto;
@@ -1195,6 +1201,32 @@ h3 {
   padding-left: 12px;
   background: #f1f5f1;
   font-weight: 900;
+}
+
+.project-tasks-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 58px;
+  padding: 0 10px;
+  border: 0;
+  border-left: 1px solid #d7ddd3;
+  background: #f1f5f1;
+  color: #456158;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.project-tasks-toggle:hover,
+.project-tasks-toggle:focus-visible {
+  background: #e4ece6;
+  color: #254c40;
+}
+
+.project-tasks-toggle:focus-visible {
+  outline: 2px solid #467266;
+  outline-offset: -3px;
 }
 
 .material-links-dialog .form-actions {
