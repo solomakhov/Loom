@@ -1098,6 +1098,8 @@ h3 {
 .material-links-dialog {
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(620px, 100%);
+  height: min(760px, calc(100dvh - 36px));
+  overflow: hidden;
 }
 
 .material-links-dialog .form-header p:last-child {
@@ -1111,10 +1113,31 @@ h3 {
 
 .material-link-targets {
   display: grid;
+  align-content: start;
   gap: 12px;
-  min-height: 160px;
-  max-height: min(58vh, 580px);
-  overflow: auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-color: #97a69e #eef2ee;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.material-link-targets::-webkit-scrollbar {
+  width: 10px;
+}
+
+.material-link-targets::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: #eef2ee;
+}
+
+.material-link-targets::-webkit-scrollbar-thumb {
+  border: 2px solid #eef2ee;
+  border-radius: 999px;
+  background: #97a69e;
 }
 
 .material-link-project {
@@ -1134,6 +1157,11 @@ h3 {
   color: #31443c;
   font-size: 0.88rem;
   font-weight: 700;
+}
+
+.material-link-project .material-link-option:not(.project-link-option) {
+  background: #ffffff;
+  color: #263a33;
 }
 
 .material-link-option:first-child {
@@ -1296,5 +1324,18 @@ h3 {
 
   .pdf-frame {
     min-height: 420px;
+  }
+
+  .material-links-dialog {
+    height: calc(100dvh - 36px);
+    padding: 18px;
+  }
+
+  .material-link-option {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .material-link-option small {
+    display: none;
   }
 }
