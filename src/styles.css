@@ -1112,8 +1112,8 @@ h3 {
 }
 
 .material-link-targets {
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   min-height: 0;
   overflow-x: hidden;
@@ -1141,6 +1141,7 @@ h3 {
 }
 
 .material-link-project {
+  flex: 0 0 auto;
   overflow: hidden;
   border: 1px solid #d7ddd3;
   border-radius: 8px;
