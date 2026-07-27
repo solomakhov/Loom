@@ -69,6 +69,16 @@ const emptyDraft: ProjectDraft = {
 };
 
 type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
+type ProjectSection = "overview" | "tasks" | "materials";
+type WorkspaceSearchResult = {
+  id: string;
+  kind: "project" | "task" | "material";
+  title: string;
+  context: string;
+  projectId?: string;
+  taskId?: string;
+  materialId?: string;
+};
 const PASSWORD_RECOVERY_REQUESTED_KEY = "loom.passwordRecoveryRequested";
 const appUrl = (import.meta.env.VITE_APP_URL || window.location.origin).replace(/\/$/, "");
 
@@ -571,6 +581,9 @@ function PdfMaterialViewer({ material }: { material: ProjectMaterial }) {
 export function App() {
   const saveTimerRef = useRef<number | null>(null);
   const pdfInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingMaterialNavigationRef = useRef<{ id: string; scope: "context" | "all" } | null>(
+    null,
+  );
   const latestWorkspaceRef = useRef<WorkspaceData>({ projects: [], materials: [] });
   const [projects, setProjects] = useState<Project[]>([]);
   const [materials, setMaterials] = useState<ProjectMaterial[]>([]);
@@ -583,6 +596,7 @@ export function App() {
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [selectedMaterialId, setSelectedMaterialId] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [projectSection, setProjectSection] = useState<ProjectSection>("tasks");
   const [materialScope, setMaterialScope] = useState<"context" | "all">("context");
   const [linkingMaterialId, setLinkingMaterialId] = useState("");
   const [expandedMaterialLinkProjectIds, setExpandedMaterialLinkProjectIds] = useState<Set<string>>(
@@ -789,19 +803,146 @@ export function App() {
   }, [selectedProject, selectedTaskId]);
 
   useEffect(() => {
+    const pendingMaterialNavigation = pendingMaterialNavigationRef.current;
+
+    if (pendingMaterialNavigation) {
+      pendingMaterialNavigationRef.current = null;
+      setMaterialScope(pendingMaterialNavigation.scope);
+      setSelectedMaterialId(pendingMaterialNavigation.id);
+      return;
+    }
+
     setMaterialScope("context");
     setSelectedMaterialId("");
   }, [selectedId, selectedTaskId]);
 
   const filteredProjects = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
+    return projects.filter(
+      (project) => statusFilter === "all" || project.status === statusFilter,
+    );
+  }, [projects, statusFilter]);
 
-    return projects.filter((project) => {
-      const matchesStatus = statusFilter === "all" || project.status === statusFilter;
-      const searchable = [project.title, project.description, ...project.tags].join(" ").toLowerCase();
-      return matchesStatus && (!normalizedQuery || searchable.includes(normalizedQuery));
-    });
-  }, [projects, query, statusFilter]);
+  const searchResults = useMemo<WorkspaceSearchResult[]>(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase("ru-RU");
+
+    if (!normalizedQuery) {
+      return [];
+    }
+
+    const matches = (values: Array<string | undefined>) =>
+      values
+        .filter((value): value is string => Boolean(value))
+        .join(" ")
+        .toLocaleLowerCase("ru-RU")
+        .includes(normalizedQuery);
+
+    const projectResults = projects
+      .filter((project) =>
+        matches([project.title, project.description, ...project.tags]),
+      )
+      .map<WorkspaceSearchResult>((project) => ({
+        id: `project:${project.id}`,
+        kind: "project",
+        title: project.title,
+        context: `Проект · ${statusLabels[project.status]}`,
+        projectId: project.id,
+      }));
+
+    const taskResults = projects.flatMap((project) =>
+      project.tasks
+        .filter((task) => matches([task.title, task.description]))
+        .map<WorkspaceSearchResult>((task) => ({
+          id: `task:${task.id}`,
+          kind: "task",
+          title: task.title,
+          context: `Задача · ${project.title}`,
+          projectId: project.id,
+          taskId: task.id,
+        })),
+    );
+
+    const materialResults = materials
+      .filter((material) =>
+        matches([material.title, material.fileName, material.markdown]),
+      )
+      .map<WorkspaceSearchResult>((material) => {
+        const linkedTaskId = material.links.find((link) => link.taskId)?.taskId;
+        const linkedTaskProject = linkedTaskId
+          ? projects.find((project) =>
+              project.tasks.some((task) => task.id === linkedTaskId),
+            )
+          : undefined;
+        const linkedProjectId = material.links.find((link) => link.projectId)?.projectId;
+        const linkedProject =
+          linkedTaskProject ?? projects.find((project) => project.id === linkedProjectId);
+
+        return {
+          id: `material:${material.id}`,
+          kind: "material",
+          title: material.title.trim() || material.fileName || "Без названия",
+          context: linkedProject
+            ? `Материал · ${linkedProject.title}`
+            : "Материал без связей",
+          projectId: linkedProject?.id,
+          materialId: material.id,
+        };
+      });
+
+    return [...projectResults, ...taskResults, ...materialResults].slice(0, 40);
+  }, [materials, projects, query]);
+
+  function openProject(projectId: string, section: ProjectSection = "tasks") {
+    setSelectedId(projectId);
+    setSelectedMaterialId("");
+    setSelectedTaskId("");
+    setProjectSection(section);
+  }
+
+  function openSearchResult(result: WorkspaceSearchResult) {
+    setQuery("");
+
+    if (result.kind === "project" && result.projectId) {
+      openProject(result.projectId, "overview");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
+    if (result.kind === "task" && result.projectId && result.taskId) {
+      setSelectedId(result.projectId);
+      setSelectedTaskId(result.taskId);
+      setSelectedMaterialId("");
+      setProjectSection("tasks");
+
+      window.setTimeout(() => {
+        const taskRow = Array.from(
+          document.querySelectorAll<HTMLElement>("[data-task-id]"),
+        ).find((element) => element.dataset.taskId === result.taskId);
+        taskRow?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+      return;
+    }
+
+    if (result.kind === "material" && result.materialId) {
+      const targetProjectId = result.projectId ?? selectedProject?.id ?? projects[0]?.id;
+
+      if (!targetProjectId) {
+        return;
+      }
+
+      const selectionWillChange =
+        targetProjectId !== selectedProject?.id || Boolean(selectedTaskId);
+
+      pendingMaterialNavigationRef.current = selectionWillChange
+        ? { id: result.materialId, scope: "all" }
+        : null;
+      setSelectedId(targetProjectId);
+      setSelectedTaskId("");
+      setMaterialScope("all");
+      setSelectedMaterialId(result.materialId);
+      setProjectSection("materials");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
 
   async function persistWorkspace(
     nextWorkspace: WorkspaceData,
@@ -1119,6 +1260,7 @@ export function App() {
 
     updateMaterials([...materials, material]);
     setSelectedMaterialId(material.id);
+    setProjectSection("materials");
   }
 
   function updateMaterialMarkdown(materialId: string, markdown: string) {
@@ -1262,6 +1404,7 @@ export function App() {
 
       updateMaterials([...latestWorkspaceRef.current.materials, material]);
       setSelectedMaterialId(material.id);
+      setProjectSection("materials");
     } catch (error) {
       console.error(error);
       setStorageError(`Не удалось загрузить PDF: ${getErrorMessage(error)}`);
@@ -1331,48 +1474,94 @@ export function App() {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Найти проект"
+            placeholder="Проекты, задачи, материалы"
+            aria-label="Поиск по рабочему пространству"
           />
+          {query ? (
+            <button
+              className="search-clear"
+              type="button"
+              onClick={() => setQuery("")}
+              aria-label="Очистить поиск"
+            >
+              <X size={15} />
+            </button>
+          ) : null}
         </label>
 
-        <div className="filter-row" aria-label="Фильтр по статусу">
-          <Filter size={15} />
-          {(["all", "active", "paused", "done"] as const).map((status) => (
-            <button
-              key={status}
-              className={statusFilter === status ? "filter-pill active" : "filter-pill"}
-              type="button"
-              onClick={() => setStatusFilter(status)}
-            >
-              {status === "all" ? "Все" : statusLabels[status]}
-            </button>
-          ))}
-        </div>
+        {query.trim() ? (
+          <div className="workspace-search-results" aria-live="polite">
+            <div className="search-results-heading">
+              <span>Результаты</span>
+              <small>{searchResults.length}</small>
+            </div>
+            {searchResults.length ? (
+              searchResults.map((result) => (
+                <button
+                  className="workspace-search-result"
+                  key={result.id}
+                  type="button"
+                  onClick={() => openSearchResult(result)}
+                >
+                  <span className={`search-result-icon ${result.kind}`}>
+                    {result.kind === "project" ? (
+                      projects.find((project) => project.id === result.projectId)?.icon ?? "P"
+                    ) : result.kind === "task" ? (
+                      <ListChecks size={16} />
+                    ) : (
+                      <FileText size={16} />
+                    )}
+                  </span>
+                  <span className="search-result-copy">
+                    <strong>{result.title}</strong>
+                    <small>{result.context}</small>
+                  </span>
+                </button>
+              ))
+            ) : (
+              <p className="search-empty">Ничего не найдено.</p>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="filter-row" aria-label="Фильтр по статусу">
+              <Filter size={15} />
+              {(["all", "active", "paused", "done"] as const).map((status) => (
+                <button
+                  key={status}
+                  className={statusFilter === status ? "filter-pill active" : "filter-pill"}
+                  type="button"
+                  onClick={() => setStatusFilter(status)}
+                >
+                  {status === "all" ? "Все" : statusLabels[status]}
+                </button>
+              ))}
+            </div>
 
-        <div className="project-list">
-          {filteredProjects.map((project) => (
-            <button
-              key={project.id}
-              className={selectedProject?.id === project.id ? "project-row selected" : "project-row"}
-              type="button"
-              onClick={() => {
-                setSelectedId(project.id);
-                setSelectedMaterialId("");
-                setSelectedTaskId("");
-              }}
-            >
-              <span className="project-icon">{project.icon}</span>
-              <span className="project-copy">
-                <span className="project-title">{project.title}</span>
-                <span className="project-meta">
-                  <span className={`status-dot ${project.status}`} />
-                  {statusLabels[project.status]}
-                  {project.dueDate ? ` · ${formatDate(project.dueDate)}` : ""}
-                </span>
-              </span>
-            </button>
-          ))}
-        </div>
+            <div className="project-list">
+              {filteredProjects.map((project) => (
+                <button
+                  key={project.id}
+                  className={
+                    selectedProject?.id === project.id ? "project-row selected" : "project-row"
+                  }
+                  type="button"
+                  onClick={() => openProject(project.id)}
+                >
+                  <span className="project-icon">{project.icon}</span>
+                  <span className="project-copy">
+                    <span className="project-title">{project.title}</span>
+                    <span className="project-meta">
+                      <span className={`status-dot ${project.status}`} />
+                      {statusLabels[project.status]}
+                      {project.dueDate ? ` · ${formatDate(project.dueDate)}` : ""}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </section>
 
       <section className="project-view" aria-label="Обзор проекта">
@@ -1411,7 +1600,45 @@ export function App() {
               </div>
             </header>
 
-            <div className="overview-grid">
+            <nav className="project-tabs" aria-label="Разделы проекта">
+              {(
+                [
+                  ["overview", "Обзор"],
+                  ["tasks", "Задачи"],
+                  ["materials", "Материалы"],
+                ] as const
+              ).map(([section, label]) => (
+                <button
+                  className={projectSection === section ? "active" : ""}
+                  key={section}
+                  type="button"
+                  aria-current={projectSection === section ? "page" : undefined}
+                  onClick={() => setProjectSection(section)}
+                >
+                  {label}
+                  {section === "tasks" ? (
+                    <span>{selectedProject.tasks.length}</span>
+                  ) : section === "materials" ? (
+                    <span>
+                      {
+                        materials.filter((material) =>
+                          material.links.some(
+                            (link) =>
+                              link.projectId === selectedProject.id ||
+                              (link.taskId &&
+                                selectedProject.tasks.some((task) => task.id === link.taskId)),
+                          ),
+                        ).length
+                      }
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+            </nav>
+
+            {projectSection === "overview" ? (
+              <>
+                <div className="overview-grid">
               <div className="metric">
                 <span className={`metric-icon ${selectedProject.status}`}>
                   {selectedProject.status === "done" ? <Check size={17} /> : <CirclePause size={17} />}
@@ -1465,8 +1692,11 @@ export function App() {
                 )}
               </div>
             </section>
+              </>
+            ) : null}
 
-            <section className="section-block tasks-section">
+            {projectSection === "tasks" ? (
+              <section className="section-block tasks-section">
               <div className="section-title-row">
                 <div>
                   <h3>Задачи</h3>
@@ -1509,6 +1739,7 @@ export function App() {
                         selectedTaskId === task.id ? "selected" : "",
                       ].filter(Boolean).join(" ")}
                       key={task.id}
+                      data-task-id={task.id}
                       onClick={() => setSelectedTaskId(task.id)}
                       style={{ marginLeft: depth ? `${depth * 20}px` : undefined }}
                     >
@@ -1713,6 +1944,8 @@ export function App() {
                                   type="button"
                                   onClick={(event) => {
                                     event.preventDefault();
+                                    setProjectSection("materials");
+                                    setMaterialScope("context");
                                     setSelectedMaterialId(material.id);
                                   }}
                                 >
@@ -1742,9 +1975,11 @@ export function App() {
                   <p>Выбери задачу в списке, чтобы открыть сроки, описание, подзадачи и материалы.</p>
                 </div>
               ) : null}
-            </section>
+              </section>
+            ) : null}
 
-            <section className="section-block materials-section">
+            {projectSection === "materials" ? (
+              <section className="section-block materials-section">
               <div className="section-title-row">
                 <div>
                   <h3>{selectedTask ? "Материалы задачи" : "Материалы проекта"}</h3>
@@ -1916,7 +2151,8 @@ export function App() {
                   )}
                 </div>
               </div>
-            </section>
+              </section>
+            ) : null}
           </>
         ) : (
           <div className="empty-state">
