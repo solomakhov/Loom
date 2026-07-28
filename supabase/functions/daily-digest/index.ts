@@ -179,6 +179,11 @@ Deno.serve(async (request) => {
     return new Response("Unauthorized", { status: 401 });
   }
 
+  const forceSend = request.headers.get("x-force-send") === "true";
+  const invocationId =
+    request.headers.get("x-invocation-id")?.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100) ||
+    new Date().toISOString().slice(0, 13);
+
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   const resendApiKey = Deno.env.get("RESEND_API_KEY");
@@ -216,8 +221,9 @@ Deno.serve(async (request) => {
     }
 
     if (
-      localTime.hour !== setting.delivery_hour ||
-      setting.last_sent_on === localTime.date
+      !forceSend &&
+      (localTime.hour !== setting.delivery_hour ||
+        setting.last_sent_on === localTime.date)
     ) {
       skipped += 1;
       continue;
@@ -254,7 +260,9 @@ Deno.serve(async (request) => {
       headers: {
         Authorization: `Bearer ${resendApiKey}`,
         "Content-Type": "application/json",
-        "Idempotency-Key": `loom-digest-${setting.user_id}-${localTime.date}`,
+        "Idempotency-Key": `loom-digest-${setting.user_id}-${
+          forceSend ? invocationId : localTime.date
+        }`,
         "User-Agent": "loom-daily-digest/1.0",
       },
       body: JSON.stringify({
@@ -290,5 +298,8 @@ Deno.serve(async (request) => {
     sent += 1;
   }
 
-  return Response.json({ sent, skipped, errors }, { status: errors.length ? 207 : 200 });
+  return Response.json(
+    { sent, skipped, errors, forced: forceSend },
+    { status: errors.length ? 207 : 200 },
+  );
 });

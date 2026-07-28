@@ -15,6 +15,8 @@ jobs:
         env:
           SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
           DAILY_DIGEST_CRON_SECRET: ${{ secrets.DAILY_DIGEST_CRON_SECRET }}
+          FORCE_SEND: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+          INVOCATION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           curl \
             --fail-with-body \
@@ -22,4 +24,6 @@ jobs:
             --request POST \
             --header "Content-Type: application/json" \
             --header "x-cron-secret: ${DAILY_DIGEST_CRON_SECRET}" \
+            --header "x-force-send: ${FORCE_SEND}" \
+            --header "x-invocation-id: ${INVOCATION_ID}" \
             "https://${SUPABASE_PROJECT_ID}.supabase.co/functions/v1/daily-digest"
