@@ -1287,6 +1287,53 @@ h3 {
   overflow: hidden;
 }
 
+.digest-settings-dialog {
+  width: min(560px, 100%);
+}
+
+.digest-settings-dialog > label {
+  display: grid;
+  gap: 7px;
+  color: #42554d;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.digest-settings-dialog input,
+.digest-settings-dialog select {
+  width: 100%;
+  border: 1px solid #d7ddd3;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px 12px;
+  color: #1f2933;
+  font: inherit;
+}
+
+.digest-settings-dialog .digest-toggle {
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  border: 1px solid #d7ddd3;
+  border-radius: 9px;
+  padding: 12px;
+  background: #f8faf7;
+}
+
+.digest-settings-dialog .digest-toggle input {
+  width: auto;
+  margin-top: 3px;
+}
+
+.digest-toggle span {
+  display: grid;
+  gap: 3px;
+}
+
+.digest-toggle small {
+  color: #6a7972;
+  font-weight: 500;
+}
+
 .material-links-dialog .form-header p:last-child {
   max-width: 440px;
   margin: 4px 0 0;

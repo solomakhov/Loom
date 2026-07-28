@@ -1,586 +1,68 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
-  ArrowDown,
-  ArrowUp,
   Archive,
-  CalendarDays,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  CirclePause,
-  Clock3,
-  Download,
   Edit3,
-  FileUp,
-  FileText,
-  Filter,
-  Link2,
-  ListChecks,
-  LogOut,
   Plus,
-  Save,
-  Search,
   Trash2,
   X,
 } from "lucide-react";
-import { MaterialEditor } from "./MaterialEditor";
+import {
+  AuthPanel,
+  PasswordRecoveryPanel,
+  clearPasswordRecoveryRequested,
+  getHashSessionTokens,
+  getPasswordRecoveryRedirectUrl,
+  getRecoveryCode,
+  isPasswordRecoveryRequested,
+  isRecoveryUrl,
+  setPasswordRecoveryRequested,
+} from "./components/AuthPanels";
+import { DigestSettingsDialog } from "./components/DigestSettingsDialog";
+import { MaterialLinksDialog } from "./components/MaterialLinksDialog";
+import { MaterialsSection } from "./components/MaterialsSection";
+import { ProjectFormDialog } from "./components/ProjectFormDialog";
+import { ProjectOverview } from "./components/ProjectOverview";
+import { ProjectSidebar } from "./components/ProjectSidebar";
+import { TaskSection } from "./components/TaskSection";
 import {
   deleteMaterialFile,
-  getMaterialFileUrl,
   loadWorkspace,
   saveWorkspace,
   uploadPdfFile,
 } from "./storage";
 import { isSupabaseConfigured, supabase } from "./supabase";
 import {
+  type ProjectSection,
+  type SaveStatus,
+  type WorkspaceSearchResult,
+  calculateProgress,
+  createProject,
+  emptyDraft,
+  getErrorMessage,
+  getSaveStatusLabel,
+  getTaskDescendantIds,
+  getTaskSiblings,
+  getTaskTreeItems,
+  normalizeTaskPositions,
+  parseTags,
+  statusLabels,
+  toDraft,
+} from "./projectModel";
+import {
   MaterialLink,
   Project,
   ProjectDraft,
   ProjectMaterial,
-  ProjectPriority,
   ProjectStatus,
   ProjectTask,
   WorkspaceData,
 } from "./types";
 
-const statusLabels: Record<ProjectStatus, string> = {
-  active: "В работе",
-  paused: "Пауза",
-  done: "Готово",
-  archived: "Архив",
-};
 
-const priorityLabels: Record<ProjectPriority, string> = {
-  low: "Низкий",
-  medium: "Средний",
-  high: "Высокий",
-};
-
-const emptyDraft: ProjectDraft = {
-  title: "",
-  description: "",
-  status: "active",
-  priority: "medium",
-  startDate: "",
-  dueDate: "",
-  tagsInput: "",
-  icon: "L",
-};
-
-type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
-type ProjectSection = "overview" | "tasks" | "materials";
-type WorkspaceSearchResult = {
-  id: string;
-  kind: "project" | "task" | "material";
-  title: string;
-  context: string;
-  projectId?: string;
-  taskId?: string;
-  materialId?: string;
-};
-const PASSWORD_RECOVERY_REQUESTED_KEY = "loom.passwordRecoveryRequested";
-const appUrl = (import.meta.env.VITE_APP_URL || window.location.origin).replace(/\/$/, "");
-
-function getSaveStatusLabel(status: SaveStatus) {
-  switch (status) {
-    case "pending":
-      return "Есть несохраненные изменения";
-    case "saving":
-      return "Сохраняем...";
-    case "saved":
-      return "Сохранено";
-    case "error":
-      return "Ошибка сохранения";
-    default:
-      return "Сохранение не требуется";
-  }
-}
-
-function toDraft(project: Project): ProjectDraft {
-  return {
-    title: project.title,
-    description: project.description,
-    status: project.status,
-    priority: project.priority,
-    startDate: project.startDate,
-    dueDate: project.dueDate,
-    tagsInput: project.tags.join(", "),
-    icon: project.icon,
-  };
-}
-
-function createProject(draft: ProjectDraft): Project {
-  const now = new Date().toISOString();
-
-  return {
-    id: crypto.randomUUID(),
-    title: draft.title.trim(),
-    description: draft.description.trim(),
-    status: draft.status,
-    priority: draft.priority,
-    startDate: draft.startDate,
-    dueDate: draft.dueDate,
-    tags: parseTags(draft.tagsInput),
-    icon: draft.icon.trim().slice(0, 2).toUpperCase() || "L",
-    progress: 0,
-    tasks: [],
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-function calculateProgress(tasks: ProjectTask[]) {
-  if (!tasks.length) {
-    return 0;
-  }
-
-  const completedCount = tasks.filter((task) => task.done).length;
-  return Math.round((completedCount / tasks.length) * 100);
-}
-
-function getTaskParentKey(parentTaskId?: string) {
-  return parentTaskId ?? "";
-}
-
-function getTaskSiblings(tasks: ProjectTask[], parentTaskId?: string) {
-  const parentKey = getTaskParentKey(parentTaskId);
-
-  return tasks
-    .filter((task) => getTaskParentKey(task.parentTaskId) === parentKey)
-    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-}
-
-function normalizeTaskPositions(tasks: ProjectTask[]) {
-  const normalizedTasks = tasks.map((task) => ({ ...task }));
-  const parentKeys = new Set(normalizedTasks.map((task) => getTaskParentKey(task.parentTaskId)));
-
-  parentKeys.forEach((parentKey) => {
-    getTaskSiblings(normalizedTasks, parentKey || undefined).forEach((task, index) => {
-      task.position = index;
-    });
-  });
-
-  return normalizedTasks;
-}
-
-function getTaskDescendantIds(tasks: ProjectTask[], taskId: string) {
-  const ids = new Set([taskId]);
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-
-    tasks.forEach((task) => {
-      if (task.parentTaskId && ids.has(task.parentTaskId) && !ids.has(task.id)) {
-        ids.add(task.id);
-        changed = true;
-      }
-    });
-  }
-
-  return ids;
-}
-
-type TaskTreeItem = {
-  task: ProjectTask;
-  depth: number;
-  siblingIndex: number;
-  siblingCount: number;
-};
-
-function getTaskTreeItems(tasks: ProjectTask[], parentTaskId?: string, depth = 0): TaskTreeItem[] {
-  const siblings = getTaskSiblings(tasks, parentTaskId);
-
-  return siblings.flatMap((task, index) => [
-    {
-      task,
-      depth,
-      siblingIndex: index,
-      siblingCount: siblings.length,
-    },
-    ...getTaskTreeItems(tasks, task.id, depth + 1),
-  ]);
-}
-
-function parseTags(value: string) {
-  return value
-    .split(",")
-    .map((tag) => tag.trim().replace(/^#/, ""))
-    .filter(Boolean);
-}
-
-function formatDate(value: string) {
-  if (!value) {
-    return "Без даты";
-  }
-
-  return new Intl.DateTimeFormat("ru-RU", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(`${value}T00:00:00`));
-}
-
-function isOverdue(project: Project) {
-  if (!project.dueDate || project.status === "done" || project.status === "archived") {
-    return false;
-  }
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return new Date(`${project.dueDate}T00:00:00`) < today;
-}
-
-function getErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (error && typeof error === "object" && "message" in error) {
-    return String((error as { message: unknown }).message);
-  }
-
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-}
-
-function isRecoveryUrl() {
-  const params = new URLSearchParams(window.location.search);
-  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-
-  return (
-    params.get("mode") === "recovery" ||
-    params.get("type") === "recovery" ||
-    hashParams.get("type") === "recovery"
-  );
-}
-
-function getRecoveryCode() {
-  const params = new URLSearchParams(window.location.search);
-  return params.get("code");
-}
-
-function getHashSessionTokens() {
-  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-  const accessToken = hashParams.get("access_token");
-  const refreshToken = hashParams.get("refresh_token");
-
-  if (!accessToken || !refreshToken) {
-    return null;
-  }
-
-  return {
-    access_token: accessToken,
-    refresh_token: refreshToken,
-  };
-}
-
-function isPasswordRecoveryRequested() {
-  return window.localStorage.getItem(PASSWORD_RECOVERY_REQUESTED_KEY) === "true";
-}
-
-function setPasswordRecoveryRequested() {
-  window.localStorage.setItem(PASSWORD_RECOVERY_REQUESTED_KEY, "true");
-}
-
-function clearPasswordRecoveryRequested() {
-  window.localStorage.removeItem(PASSWORD_RECOVERY_REQUESTED_KEY);
-}
-
-function getPasswordRecoveryRedirectUrl() {
-  return `${appUrl}/?mode=recovery`;
-}
-
-type AuthMode = "sign-in" | "sign-up" | "reset-password";
-
-function AuthPanel() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [mode, setMode] = useState<AuthMode>("sign-in");
-  const [message, setMessage] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  async function handleAuth(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!supabase || !email.trim() || (mode !== "reset-password" && !password)) {
-      return;
-    }
-
-    setIsSubmitting(true);
-    setMessage("");
-
-    const { error } = await (async () => {
-      if (mode === "reset-password") {
-        return supabase.auth.resetPasswordForEmail(email.trim(), {
-          redirectTo: getPasswordRecoveryRedirectUrl(),
-        });
-      }
-
-      clearPasswordRecoveryRequested();
-
-      const credentials = {
-        email: email.trim(),
-        password,
-      };
-
-      return mode === "sign-in"
-        ? supabase.auth.signInWithPassword(credentials)
-        : supabase.auth.signUp(credentials);
-    })();
-
-    setIsSubmitting(false);
-
-    if (error) {
-      const errorMessage = getErrorMessage(error);
-      setMessage(
-        errorMessage ? `Не удалось выполнить действие: ${errorMessage}` : "Не удалось выполнить действие.",
-      );
-      return;
-    }
-
-    setMessage(
-      mode === "reset-password"
-        ? "Проверь почту и открой ссылку сброса пароля."
-        : mode === "sign-in"
-          ? "Вход выполнен."
-          : "Аккаунт создан. Если Supabase требует подтверждение email, проверь почту.",
-    );
-
-    if (mode === "reset-password") {
-      setPasswordRecoveryRequested();
-    } else {
-      clearPasswordRecoveryRequested();
-    }
-  }
-
-  return (
-    <main className="auth-shell">
-      <form className="auth-panel" onSubmit={handleAuth}>
-        <p className="eyebrow">Loom</p>
-        <h1>
-          {mode === "reset-password"
-            ? "Сброс пароля"
-            : mode === "sign-in"
-              ? "Вход"
-              : "Регистрация"}
-        </h1>
-        <p>
-          {mode === "reset-password"
-            ? "Укажи email, и Supabase отправит ссылку для установки нового пароля."
-            : mode === "sign-in"
-              ? "Войди с email и паролем."
-              : "Создай аккаунт с email и паролем."}
-        </p>
-
-        <label>
-          Email
-          <input
-            required
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="you@example.com"
-          />
-        </label>
-
-        {mode !== "reset-password" ? (
-          <label>
-            Пароль
-            <input
-              required
-              minLength={6}
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="Минимум 6 символов"
-            />
-          </label>
-        ) : null}
-
-        <button className="text-button primary" type="submit" disabled={isSubmitting}>
-          {isSubmitting
-            ? "Проверяем..."
-            : mode === "reset-password"
-              ? "Отправить ссылку"
-              : mode === "sign-in"
-                ? "Войти"
-                : "Создать аккаунт"}
-        </button>
-
-        <button
-          className="text-button"
-          type="button"
-          onClick={() => {
-            setMode(mode === "sign-in" ? "sign-up" : "sign-in");
-            setMessage("");
-          }}
-        >
-          {mode === "sign-in" ? "Создать аккаунт" : "Уже есть аккаунт"}
-        </button>
-
-        {mode !== "reset-password" ? (
-          <button
-            className="text-button"
-            type="button"
-            onClick={() => {
-              setMode("reset-password");
-              setPassword("");
-              setMessage("");
-            }}
-          >
-            Сбросить пароль
-          </button>
-        ) : null}
-
-        {message ? <p className="auth-message">{message}</p> : null}
-      </form>
-    </main>
-  );
-}
-
-type PasswordRecoveryPanelProps = {
-  onComplete: () => void;
-};
-
-function PasswordRecoveryPanel({ onComplete }: PasswordRecoveryPanelProps) {
-  const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  async function handleUpdatePassword(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!supabase || !password) {
-      return;
-    }
-
-    setIsSubmitting(true);
-    setMessage("");
-
-    const { error } = await supabase.auth.updateUser({ password });
-
-    setIsSubmitting(false);
-
-    if (error) {
-      const errorMessage = getErrorMessage(error);
-      setMessage(
-        errorMessage ? `Не удалось обновить пароль: ${errorMessage}` : "Не удалось обновить пароль.",
-      );
-      return;
-    }
-
-    setPassword("");
-    setMessage("Пароль обновлен.");
-    window.history.replaceState({}, document.title, window.location.origin);
-    clearPasswordRecoveryRequested();
-    onComplete();
-  }
-
-  return (
-    <main className="auth-shell">
-      <form className="auth-panel" onSubmit={handleUpdatePassword}>
-        <p className="eyebrow">Loom</p>
-        <h1>Новый пароль</h1>
-        <p>Задай новый пароль для текущего аккаунта.</p>
-
-        <label>
-          Новый пароль
-          <input
-            required
-            minLength={6}
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder="Минимум 6 символов"
-          />
-        </label>
-
-        <button className="text-button primary" type="submit" disabled={isSubmitting}>
-          {isSubmitting ? "Сохраняем..." : "Сохранить пароль"}
-        </button>
-
-        {message ? <p className="auth-message">{message}</p> : null}
-      </form>
-    </main>
-  );
-}
-
-function formatFileSize(value?: number) {
-  if (!value) {
-    return "";
-  }
-
-  if (value < 1024 * 1024) {
-    return `${Math.ceil(value / 1024)} КБ`;
-  }
-
-  return `${(value / 1024 / 1024).toFixed(1)} МБ`;
-}
-
-function PdfMaterialViewer({ material }: { material: ProjectMaterial }) {
-  const [fileUrl, setFileUrl] = useState("");
-  const [fileError, setFileError] = useState("");
-
-  useEffect(() => {
-    let isMounted = true;
-
-    if (!material.filePath) {
-      setFileError("У PDF не указан путь к файлу.");
-      return;
-    }
-
-    setFileUrl("");
-    setFileError("");
-    getMaterialFileUrl(material.filePath)
-      .then((url) => {
-        if (isMounted) {
-          setFileUrl(url);
-        }
-      })
-      .catch((error) => {
-        if (isMounted) {
-          setFileError(`Не удалось открыть PDF: ${getErrorMessage(error)}`);
-        }
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [material.filePath]);
-
-  return (
-    <div className="pdf-material">
-      <div className="pdf-material-meta">
-        <span>{material.fileName || "PDF-документ"}</span>
-        <span>{formatFileSize(material.fileSize)}</span>
-        {fileUrl ? (
-          <a className="text-button" href={fileUrl} target="_blank" rel="noreferrer">
-            <Download size={15} />
-            Скачать
-          </a>
-        ) : null}
-      </div>
-      {fileError ? <p className="material-file-error">{fileError}</p> : null}
-      {!fileError && !fileUrl ? <p className="muted">Открываем PDF...</p> : null}
-      {fileUrl ? (
-        <iframe
-          className="pdf-frame"
-          src={fileUrl}
-          title={material.title.trim() || material.fileName || "PDF"}
-        />
-      ) : null}
-    </div>
-  );
-}
 
 export function App() {
   const saveTimerRef = useRef<number | null>(null);
-  const pdfInputRef = useRef<HTMLInputElement | null>(null);
   const pendingMaterialNavigationRef = useRef<{ id: string; scope: "context" | "all" } | null>(
     null,
   );
@@ -609,6 +91,7 @@ export function App() {
   const [isAuthLoading, setIsAuthLoading] = useState(isSupabaseConfigured);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(() => isRecoveryUrl());
+  const [isDigestSettingsOpen, setIsDigestSettingsOpen] = useState(false);
 
   useEffect(() => {
     latestWorkspaceRef.current = { projects, materials };
@@ -1451,118 +934,22 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <section className="sidebar" aria-label="Проекты">
-        <div className="brand-row">
-          <div>
-            <p className="eyebrow">Loom</p>
-            <h1>Проекты</h1>
-          </div>
-          <div className="sidebar-actions">
-            {session ? (
-              <button className="icon-button" type="button" onClick={signOut} title="Выйти">
-                <LogOut size={17} />
-              </button>
-            ) : null}
-            <button className="icon-button primary" type="button" onClick={openCreateForm} title="Создать проект">
-              <Plus size={18} />
-            </button>
-          </div>
-        </div>
-
-        <label className="search-box">
-          <Search size={16} />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Проекты, задачи, материалы"
-            aria-label="Поиск по рабочему пространству"
-          />
-          {query ? (
-            <button
-              className="search-clear"
-              type="button"
-              onClick={() => setQuery("")}
-              aria-label="Очистить поиск"
-            >
-              <X size={15} />
-            </button>
-          ) : null}
-        </label>
-
-        {query.trim() ? (
-          <div className="workspace-search-results" aria-live="polite">
-            <div className="search-results-heading">
-              <span>Результаты</span>
-              <small>{searchResults.length}</small>
-            </div>
-            {searchResults.length ? (
-              searchResults.map((result) => (
-                <button
-                  className="workspace-search-result"
-                  key={result.id}
-                  type="button"
-                  onClick={() => openSearchResult(result)}
-                >
-                  <span className={`search-result-icon ${result.kind}`}>
-                    {result.kind === "project" ? (
-                      projects.find((project) => project.id === result.projectId)?.icon ?? "P"
-                    ) : result.kind === "task" ? (
-                      <ListChecks size={16} />
-                    ) : (
-                      <FileText size={16} />
-                    )}
-                  </span>
-                  <span className="search-result-copy">
-                    <strong>{result.title}</strong>
-                    <small>{result.context}</small>
-                  </span>
-                </button>
-              ))
-            ) : (
-              <p className="search-empty">Ничего не найдено.</p>
-            )}
-          </div>
-        ) : (
-          <>
-            <div className="filter-row" aria-label="Фильтр по статусу">
-              <Filter size={15} />
-              {(["all", "active", "paused", "done"] as const).map((status) => (
-                <button
-                  key={status}
-                  className={statusFilter === status ? "filter-pill active" : "filter-pill"}
-                  type="button"
-                  onClick={() => setStatusFilter(status)}
-                >
-                  {status === "all" ? "Все" : statusLabels[status]}
-                </button>
-              ))}
-            </div>
-
-            <div className="project-list">
-              {filteredProjects.map((project) => (
-                <button
-                  key={project.id}
-                  className={
-                    selectedProject?.id === project.id ? "project-row selected" : "project-row"
-                  }
-                  type="button"
-                  onClick={() => openProject(project.id)}
-                >
-                  <span className="project-icon">{project.icon}</span>
-                  <span className="project-copy">
-                    <span className="project-title">{project.title}</span>
-                    <span className="project-meta">
-                      <span className={`status-dot ${project.status}`} />
-                      {statusLabels[project.status]}
-                      {project.dueDate ? ` · ${formatDate(project.dueDate)}` : ""}
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-      </section>
+      <ProjectSidebar
+        hasSession={Boolean(session)}
+        query={query}
+        statusFilter={statusFilter}
+        searchResults={searchResults}
+        projects={projects}
+        filteredProjects={filteredProjects}
+        selectedProject={selectedProject}
+        onQueryChange={setQuery}
+        onStatusFilterChange={setStatusFilter}
+        onOpenSearchResult={openSearchResult}
+        onOpenProject={openProject}
+        onCreateProject={openCreateForm}
+        onOpenDigestSettings={() => setIsDigestSettingsOpen(true)}
+        onSignOut={signOut}
+      />
 
       <section className="project-view" aria-label="Обзор проекта">
         <div className={`save-status ${saveStatus}`}>
@@ -1637,522 +1024,54 @@ export function App() {
             </nav>
 
             {projectSection === "overview" ? (
-              <>
-                <div className="overview-grid">
-              <div className="metric">
-                <span className={`metric-icon ${selectedProject.status}`}>
-                  {selectedProject.status === "done" ? <Check size={17} /> : <CirclePause size={17} />}
-                </span>
-                <div>
-                  <span className="label">Статус</span>
-                  <strong>{statusLabels[selectedProject.status]}</strong>
-                </div>
-              </div>
-              <div className="metric">
-                <span className="metric-icon">
-                  <Clock3 size={17} />
-                </span>
-                <div>
-                  <span className="label">Приоритет</span>
-                  <strong>{priorityLabels[selectedProject.priority]}</strong>
-                </div>
-              </div>
-              <div className={isOverdue(selectedProject) ? "metric overdue" : "metric"}>
-                <span className="metric-icon">
-                  <CalendarDays size={17} />
-                </span>
-                <div>
-                  <span className="label">Дедлайн</span>
-                  <strong>{formatDate(selectedProject.dueDate)}</strong>
-                </div>
-              </div>
-              <div className="metric">
-                <span className="metric-icon">
-                  <ListChecks size={17} />
-                </span>
-                <div>
-                  <span className="label">Задачи</span>
-                  <strong>{selectedProject.progress}%</strong>
-                </div>
-              </div>
-            </div>
-
-            <section className="section-block">
-              <h3>Описание</h3>
-              <p>{selectedProject.description || "Пока без описания."}</p>
-            </section>
-
-            <section className="section-block">
-              <h3>Метки</h3>
-              <div className="tag-row">
-                {selectedProject.tags.length ? (
-                  selectedProject.tags.map((tag) => <span key={tag}>#{tag}</span>)
-                ) : (
-                  <p>Метки не добавлены.</p>
-                )}
-              </div>
-            </section>
-              </>
+              <ProjectOverview project={selectedProject} />
             ) : null}
 
             {projectSection === "tasks" ? (
-              <section className="section-block tasks-section">
-              <div className="section-title-row">
-                <div>
-                  <h3>Задачи</h3>
-                  <p>
-                    {selectedProject.tasks.filter((task) => task.done).length} из{" "}
-                    {selectedProject.tasks.length} выполнено
-                  </p>
-                </div>
-                <strong>{selectedProject.progress}%</strong>
-              </div>
-
-              <div className="progress-track" aria-label="Прогресс задач">
-                <span style={{ width: `${selectedProject.progress}%` }} />
-              </div>
-
-              <form
-                className="task-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  addTask(selectedProject, newTaskTitle);
+              <TaskSection
+                project={selectedProject}
+                selectedTask={selectedTask}
+                selectedTaskId={selectedTaskId}
+                taskItems={selectedTaskItems}
+                subtasks={selectedTaskSubtasks}
+                materials={selectedTaskMaterials}
+                newTaskTitle={newTaskTitle}
+                onNewTaskTitleChange={setNewTaskTitle}
+                onSelectTask={setSelectedTaskId}
+                onAddTask={addTask}
+                onAddSubtask={addSubtask}
+                onToggleTask={toggleTask}
+                onUpdateTask={updateTask}
+                onDeleteTask={deleteTask}
+                onMoveTask={moveTask}
+                onAddMaterial={(project, taskId) => addMaterial(project, taskId)}
+                onOpenMaterial={(materialId) => {
+                  setProjectSection("materials");
+                  setMaterialScope("context");
+                  setSelectedMaterialId(materialId);
                 }}
-              >
-                <input
-                  value={newTaskTitle}
-                  onChange={(event) => setNewTaskTitle(event.target.value)}
-                  placeholder="Добавить пункт плана"
-                />
-                <button className="icon-button primary" type="submit" title="Добавить задачу">
-                  <Plus size={17} />
-                </button>
-              </form>
-
-              <div className="task-list">
-                {selectedProject.tasks.length ? (
-                  selectedTaskItems.map(({ task, depth, siblingIndex, siblingCount }) => (
-                    <div
-                      className={[
-                        "task-row",
-                        task.done ? "done" : "",
-                        selectedTaskId === task.id ? "selected" : "",
-                      ].filter(Boolean).join(" ")}
-                      key={task.id}
-                      data-task-id={task.id}
-                      onClick={() => setSelectedTaskId(task.id)}
-                      style={{ marginLeft: depth ? `${depth * 20}px` : undefined }}
-                    >
-                      <div className="task-row-main">
-                        <input
-                          checked={task.done}
-                          type="checkbox"
-                          onClick={(event) => event.stopPropagation()}
-                          onChange={() => toggleTask(selectedProject, task.id)}
-                        />
-                        <span>{task.title}</span>
-                      </div>
-                      <div className="task-actions">
-                        <button
-                          className="icon-button"
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            moveTask(selectedProject, task.id, -1);
-                          }}
-                          disabled={siblingIndex === 0}
-                          title="Выше"
-                        >
-                          <ArrowUp size={15} />
-                        </button>
-                        <button
-                          className="icon-button"
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            moveTask(selectedProject, task.id, 1);
-                          }}
-                          disabled={siblingIndex === siblingCount - 1}
-                          title="Ниже"
-                        >
-                          <ArrowDown size={15} />
-                        </button>
-                        <button
-                          className="icon-button"
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            addSubtask(selectedProject, task.id);
-                          }}
-                          title="Добавить подзадачу"
-                        >
-                          <Plus size={15} />
-                        </button>
-                        <button
-                          className="icon-button danger"
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            deleteTask(selectedProject, task.id);
-                          }}
-                          title="Удалить задачу"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="muted">План пока пуст. Добавь первый конкретный шаг.</p>
-                )}
-              </div>
-
-              {selectedTask ? (
-                <div className="task-detail-panel">
-                  <div className="task-detail-header">
-                    <div>
-                      <span className="label">Задача</span>
-                      <h3>{selectedTask.title}</h3>
-                    </div>
-                    <button
-                      className="icon-button"
-                      type="button"
-                      onClick={() => setSelectedTaskId("")}
-                      title="Закрыть"
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-
-                  <div className="task-detail-grid">
-                    <label>
-                      Название
-                      <input
-                        value={selectedTask.title}
-                        onChange={(event) =>
-                          updateTask(
-                            selectedProject,
-                            selectedTask.id,
-                            { title: event.target.value },
-                            { debounce: true },
-                          )
-                        }
-                      />
-                    </label>
-                    <label>
-                      Статус
-                      <select
-                        value={selectedTask.done ? "done" : "active"}
-                        onChange={(event) =>
-                          updateTask(selectedProject, selectedTask.id, { done: event.target.value === "done" })
-                        }
-                      >
-                        <option value="active">В работе</option>
-                        <option value="done">Готово</option>
-                      </select>
-                    </label>
-                    <label>
-                      Начало
-                      <input
-                        type="date"
-                        value={selectedTask.startDate ?? ""}
-                        onChange={(event) =>
-                          updateTask(selectedProject, selectedTask.id, { startDate: event.target.value })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Срок
-                      <input
-                        type="date"
-                        value={selectedTask.dueDate ?? ""}
-                        onChange={(event) =>
-                          updateTask(selectedProject, selectedTask.id, { dueDate: event.target.value })
-                        }
-                      />
-                    </label>
-                  </div>
-
-                  <label className="task-description-field">
-                    Описание
-                    <textarea
-                      value={selectedTask.description ?? ""}
-                      onChange={(event) =>
-                        updateTask(
-                          selectedProject,
-                          selectedTask.id,
-                          { description: event.target.value },
-                          { debounce: true },
-                        )
-                      }
-                      placeholder="Контекст, критерии готовности, ссылки"
-                    />
-                  </label>
-
-                  <div className="task-detail-columns">
-                    <div>
-                      <div className="task-detail-subtitle">
-                        <h4>Подзадачи</h4>
-                        <button
-                          className="text-button"
-                          type="button"
-                          onClick={() => addSubtask(selectedProject, selectedTask.id)}
-                        >
-                          <Plus size={15} />
-                          Подзадача
-                        </button>
-                      </div>
-                      <div className="compact-list">
-                        {selectedTaskSubtasks.length ? (
-                          selectedTaskSubtasks.map((task) => (
-                            <button
-                              className="compact-row"
-                              key={task.id}
-                              type="button"
-                              onClick={() => setSelectedTaskId(task.id)}
-                            >
-                              <span>{task.title}</span>
-                              <small>{task.done ? "Готово" : "В работе"}</small>
-                            </button>
-                          ))
-                        ) : (
-                          <p className="muted">У этой задачи пока нет подзадач.</p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="task-detail-subtitle">
-                        <h4>Материалы</h4>
-                        <button
-                          className="text-button"
-                          type="button"
-                          onClick={() => addMaterial(selectedProject, selectedTask.id)}
-                        >
-                          <Plus size={15} />
-                          Материал
-                        </button>
-                      </div>
-                      <div className="linked-material-list">
-                        {selectedTaskMaterials.length ? (
-                          selectedTaskMaterials.map((material) => (
-                            <details className="linked-material" key={material.id}>
-                              <summary>
-                                <span>{material.title.trim() || material.fileName || "Без названия"}</span>
-                                <button
-                                  className="text-button"
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.preventDefault();
-                                    setProjectSection("materials");
-                                    setMaterialScope("context");
-                                    setSelectedMaterialId(material.id);
-                                  }}
-                                >
-                                  Открыть
-                                </button>
-                              </summary>
-                              {material.kind === "pdf" ? (
-                                <div className="linked-material-file">
-                                  <FileUp size={16} />
-                                  <span>{material.fileName}</span>
-                                  <small>{formatFileSize(material.fileSize)}</small>
-                                </div>
-                              ) : (
-                                <pre>{material.markdown || "Материал пока пуст."}</pre>
-                              )}
-                            </details>
-                          ))
-                        ) : (
-                          <p className="muted">К задаче пока не привязаны материалы.</p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ) : selectedProject.tasks.length ? (
-                <div className="task-detail-empty">
-                  <p>Выбери задачу в списке, чтобы открыть сроки, описание, подзадачи и материалы.</p>
-                </div>
-              ) : null}
-              </section>
+              />
             ) : null}
 
             {projectSection === "materials" ? (
-              <section className="section-block materials-section">
-              <div className="section-title-row">
-                <div>
-                  <h3>{selectedTask ? "Материалы задачи" : "Материалы проекта"}</h3>
-                  <p>
-                    {materialScope === "all"
-                      ? "Все документы и PDF, включая материалы без связей."
-                      : selectedTask
-                        ? `Только материалы задачи «${selectedTask.title}».`
-                        : "Только материалы, связанные непосредственно с проектом."}
-                  </p>
-                </div>
-                <div className="material-section-actions">
-                  <div className="segmented-control" aria-label="Область материалов">
-                    <button
-                      className={materialScope === "context" ? "selected" : ""}
-                      type="button"
-                      onClick={() => setMaterialScope("context")}
-                    >
-                      {selectedTask ? "Задача" : "Проект"}
-                    </button>
-                    <button
-                      className={materialScope === "all" ? "selected" : ""}
-                      type="button"
-                      onClick={() => setMaterialScope("all")}
-                    >
-                      Все
-                    </button>
-                  </div>
-                  <button
-                    className="text-button"
-                    type="button"
-                    onClick={() =>
-                      addMaterial(
-                        materialScope === "all" ? undefined : selectedProject,
-                        materialScope === "context" ? selectedTask?.id : undefined,
-                      )
-                    }
-                  >
-                    <Plus size={16} />
-                    Документ
-                  </button>
-                  <button
-                    className="text-button primary"
-                    type="button"
-                    onClick={() => pdfInputRef.current?.click()}
-                    disabled={isUploadingPdf}
-                  >
-                    <FileUp size={16} />
-                    {isUploadingPdf ? "Загрузка..." : "PDF"}
-                  </button>
-                  <input
-                    ref={pdfInputRef}
-                    className="visually-hidden"
-                    type="file"
-                    accept="application/pdf,.pdf"
-                    onChange={handlePdfSelected}
-                  />
-                </div>
-              </div>
-
-              <div className="materials-layout">
-                <div className="material-list" aria-label="Материалы">
-                  {contextualMaterials.length ? (
-                    contextualMaterials.map((material) => (
-                      <button
-                        className={
-                          selectedMaterial?.id === material.id ? "material-row selected" : "material-row"
-                        }
-                        key={material.id}
-                        type="button"
-                        onClick={() => setSelectedMaterialId(material.id)}
-                      >
-                        {material.kind === "pdf" ? <FileUp size={16} /> : <FileText size={16} />}
-                        <span className="material-row-copy">
-                          <span>{material.title.trim() || material.fileName || "Без названия"}</span>
-                          <small>
-                            {materialScope === "all"
-                              ? material.links.length
-                                ? `${material.links.length} связ.`
-                                : "Без связей"
-                              : material.kind === "pdf"
-                                ? `PDF${material.fileSize ? ` · ${formatFileSize(material.fileSize)}` : ""}`
-                                : "Документ"}
-                          </small>
-                        </span>
-                      </button>
-                    ))
-                  ) : (
-                    <p className="muted">
-                      {materialScope === "all"
-                        ? "Пока нет материалов."
-                        : selectedTask
-                          ? "К этой задаче материалы не привязаны."
-                          : "К проекту материалы не привязаны."}
-                    </p>
-                  )}
-                </div>
-
-                <div className="material-editor-panel">
-                  {selectedMaterial ? (
-                    <>
-                      <div className="material-title-row">
-                        <input
-                          value={selectedMaterial.title}
-                          onChange={(event) => renameMaterial(selectedMaterial.id, event.target.value)}
-                          aria-label="Название материала"
-                          placeholder="Без названия"
-                        />
-                        <button
-                          className="icon-button"
-                          type="button"
-                          onClick={() => openMaterialLinks(selectedMaterial)}
-                          title="Изменить связи"
-                        >
-                          <Link2 size={16} />
-                        </button>
-                        <button
-                          className="icon-button danger"
-                          type="button"
-                          onClick={() => deleteMaterial(selectedMaterial.id)}
-                          title="Удалить материал"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                      <button
-                        className="material-link-summary"
-                        type="button"
-                        onClick={() => openMaterialLinks(selectedMaterial)}
-                      >
-                        <Link2 size={15} />
-                        {selectedMaterial.links.length
-                          ? `Связи: ${selectedMaterial.links.length}`
-                          : "Материал без связей"}
-                      </button>
-                      {selectedMaterial.kind === "pdf" ? (
-                        <PdfMaterialViewer material={selectedMaterial} />
-                      ) : (
-                        <MaterialEditor
-                          key={selectedMaterial.id}
-                          markdown={selectedMaterial.markdown}
-                          onChange={(markdown) =>
-                            updateMaterialMarkdown(selectedMaterial.id, markdown)
-                          }
-                        />
-                      )}
-                    </>
-                  ) : (
-                    <div className="material-empty">
-                      <h3>Здесь пока пусто</h3>
-                      <p>
-                        Создай документ или загрузи PDF. Связи с проектами и задачами можно
-                        изменить позже.
-                      </p>
-                      <button
-                        className="text-button primary"
-                        type="button"
-                        onClick={() =>
-                          addMaterial(
-                            materialScope === "all" ? undefined : selectedProject,
-                            materialScope === "context" ? selectedTask?.id : undefined,
-                          )
-                        }
-                      >
-                        <Plus size={16} />
-                        Новый документ
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-              </section>
+              <MaterialsSection
+                project={selectedProject}
+                selectedTask={selectedTask}
+                materialScope={materialScope}
+                materials={contextualMaterials}
+                selectedMaterial={selectedMaterial}
+                isUploadingPdf={isUploadingPdf}
+                onMaterialScopeChange={setMaterialScope}
+                onAddMaterial={addMaterial}
+                onPdfSelected={handlePdfSelected}
+                onSelectMaterial={setSelectedMaterialId}
+                onRenameMaterial={renameMaterial}
+                onOpenLinks={openMaterialLinks}
+                onDeleteMaterial={deleteMaterial}
+                onUpdateMarkdown={updateMaterialMarkdown}
+              />
             ) : null}
+
           </>
         ) : (
           <div className="empty-state">
@@ -2167,221 +1086,33 @@ export function App() {
       </section>
 
       {linkingMaterial ? (
-        <div
-          className="modal-backdrop"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setLinkingMaterialId("");
-            }
-          }}
-        >
-          <section
-            className="modal-panel material-links-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="material-links-title"
-          >
-            <div className="form-header">
-              <div>
-                <p className="eyebrow">Материал</p>
-                <h2 id="material-links-title">Связи</h2>
-                <p>{linkingMaterial.title.trim() || linkingMaterial.fileName || "Без названия"}</p>
-              </div>
-              <button
-                className="icon-button"
-                type="button"
-                onClick={() => setLinkingMaterialId("")}
-                title="Закрыть"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="material-link-targets">
-              {projects.map((project) => {
-                const isExpanded = expandedMaterialLinkProjectIds.has(project.id);
-                const taskItems = getTaskTreeItems(project.tasks);
-
-                return (
-                  <div className="material-link-project" key={project.id}>
-                    <div className="project-link-row">
-                      <label className="material-link-option project-link-option">
-                        <input
-                          type="checkbox"
-                          checked={linkingMaterial.links.some(
-                            (link) => link.projectId === project.id,
-                          )}
-                          onChange={() =>
-                            toggleMaterialLink(linkingMaterial.id, { projectId: project.id })
-                          }
-                        />
-                        <span>{project.title}</span>
-                        <small>Проект</small>
-                      </label>
-                      {taskItems.length ? (
-                        <button
-                          className="project-tasks-toggle"
-                          type="button"
-                          aria-expanded={isExpanded}
-                          aria-label={`${isExpanded ? "Скрыть" : "Показать"} задачи проекта «${project.title}»`}
-                          title={`${isExpanded ? "Скрыть" : "Показать"} задачи (${taskItems.length})`}
-                          onClick={() => toggleMaterialLinkProject(project.id)}
-                        >
-                          <span>{taskItems.length}</span>
-                          {isExpanded ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
-                        </button>
-                      ) : null}
-                    </div>
-                    {isExpanded
-                      ? taskItems.map(({ task, depth }) => (
-                          <label
-                            className="material-link-option"
-                            key={task.id}
-                            style={{ paddingLeft: `${28 + depth * 18}px` }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={linkingMaterial.links.some((link) => link.taskId === task.id)}
-                              onChange={() =>
-                                toggleMaterialLink(linkingMaterial.id, { taskId: task.id })
-                              }
-                            />
-                            <span>{task.title}</span>
-                            <small>Задача</small>
-                          </label>
-                        ))
-                      : null}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="form-actions">
-              <span className="muted">
-                {linkingMaterial.links.length
-                  ? `Выбрано связей: ${linkingMaterial.links.length}`
-                  : "Материал останется свободным"}
-              </span>
-              <button
-                className="text-button primary"
-                type="button"
-                onClick={() => setLinkingMaterialId("")}
-              >
-                Готово
-              </button>
-            </div>
-          </section>
-        </div>
+        <MaterialLinksDialog
+          material={linkingMaterial}
+          projects={projects}
+          expandedProjectIds={expandedMaterialLinkProjectIds}
+          onToggleLink={toggleMaterialLink}
+          onToggleProject={toggleMaterialLinkProject}
+          onClose={() => setLinkingMaterialId("")}
+        />
       ) : null}
 
       {isFormOpen ? (
-        <div className="modal-backdrop" role="presentation">
-          <form className="project-form" onSubmit={handleSubmit}>
-            <div className="form-header">
-              <h2>{editingId ? "Редактировать проект" : "Новый проект"}</h2>
-              <button className="icon-button" type="button" onClick={closeForm} title="Закрыть">
-                <X size={18} />
-              </button>
-            </div>
-
-            <label>
-              Название
-              <input
-                required
-                value={draft.title}
-                onChange={(event) => setDraft({ ...draft, title: event.target.value })}
-                placeholder="Например: Loom MVP"
-              />
-            </label>
-
-            <label>
-              Описание
-              <textarea
-                value={draft.description}
-                onChange={(event) => setDraft({ ...draft, description: event.target.value })}
-                placeholder="Цель, контекст, ссылки, важные ограничения"
-              />
-            </label>
-
-            <div className="form-grid">
-              <label>
-                Статус
-                <select
-                  value={draft.status}
-                  onChange={(event) => setDraft({ ...draft, status: event.target.value as ProjectStatus })}
-                >
-                  <option value="active">В работе</option>
-                  <option value="paused">Пауза</option>
-                  <option value="done">Готово</option>
-                  <option value="archived">Архив</option>
-                </select>
-              </label>
-
-              <label>
-                Приоритет
-                <select
-                  value={draft.priority}
-                  onChange={(event) => setDraft({ ...draft, priority: event.target.value as ProjectPriority })}
-                >
-                  <option value="low">Низкий</option>
-                  <option value="medium">Средний</option>
-                  <option value="high">Высокий</option>
-                </select>
-              </label>
-
-              <label>
-                Старт
-                <input
-                  type="date"
-                  value={draft.startDate}
-                  onChange={(event) => setDraft({ ...draft, startDate: event.target.value })}
-                />
-              </label>
-
-              <label>
-                Дедлайн
-                <input
-                  type="date"
-                  value={draft.dueDate}
-                  onChange={(event) => setDraft({ ...draft, dueDate: event.target.value })}
-                />
-              </label>
-            </div>
-
-            <div className="form-grid compact">
-              <label>
-                Метка проекта
-                <input
-                  maxLength={2}
-                  value={draft.icon}
-                  onChange={(event) => setDraft({ ...draft, icon: event.target.value })}
-                  placeholder="L"
-                />
-              </label>
-              <label>
-                Теги
-                <input
-                  value={draft.tagsInput}
-                  onChange={(event) => setDraft({ ...draft, tagsInput: event.target.value })}
-                  placeholder="разработка, дом, отпуск"
-                />
-              </label>
-            </div>
-
-            <div className="form-actions">
-              <button className="text-button" type="button" onClick={closeForm}>
-                <X size={16} />
-                Отмена
-              </button>
-              <button className="text-button primary" type="submit">
-                <Save size={16} />
-                Сохранить
-              </button>
-            </div>
-          </form>
-        </div>
+        <ProjectFormDialog
+          draft={draft}
+          isEditing={Boolean(editingId)}
+          onDraftChange={setDraft}
+          onClose={closeForm}
+          onSubmit={handleSubmit}
+        />
       ) : null}
+
+      {isDigestSettingsOpen && session?.user.email ? (
+        <DigestSettingsDialog
+          accountEmail={session.user.email}
+          onClose={() => setIsDigestSettingsOpen(false)}
+        />
+      ) : null}
+
     </main>
   );
 }

@@ -1,0 +1,25 @@
+name: Daily project digest
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+
+jobs:
+  send:
+    name: Send due digests
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Invoke daily digest function
+        env:
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+          DAILY_DIGEST_CRON_SECRET: ${{ secrets.DAILY_DIGEST_CRON_SECRET }}
+        run: |
+          curl \
+            --fail-with-body \
+            --retry 2 \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --header "x-cron-secret: ${DAILY_DIGEST_CRON_SECRET}" \
+            "https://${SUPABASE_PROJECT_ID}.supabase.co/functions/v1/daily-digest"
