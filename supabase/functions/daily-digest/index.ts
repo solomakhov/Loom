@@ -18,8 +18,10 @@ type ProjectRow = {
 
 type TaskRow = {
   project_id: string;
+  parent_task_id: string | null;
   title: string;
   done: boolean;
+  position: number;
   due_date: string | null;
 };
 
@@ -57,13 +59,26 @@ function getLocalDateAndHour(timezone: string) {
   };
 }
 
+function getProjectTasks(tasks: TaskRow[], projectId: string) {
+  return tasks
+    .filter((task) => task.project_id === projectId)
+    .sort((a, b) => {
+      const parentCompare = (a.parent_task_id ?? "").localeCompare(b.parent_task_id ?? "");
+      return parentCompare || a.position - b.position;
+    });
+}
+
 function renderDigest(
   projects: ProjectRow[],
   tasks: TaskRow[],
   localDate: string,
   appUrl: string,
 ) {
-  const visibleProjects = projects.filter((project) => project.status !== "archived");
+  const visibleProjects = projects.filter(
+    (project) =>
+      project.status !== "archived" &&
+      tasks.some((task) => task.project_id === project.id),
+  );
   const activeCount = visibleProjects.filter((project) => project.status === "active").length;
   const pausedCount = visibleProjects.filter((project) => project.status === "paused").length;
   const completedCount = visibleProjects.filter((project) => project.status === "done").length;
@@ -76,8 +91,9 @@ function renderDigest(
 
   const projectBlocks = visibleProjects
     .map((project) => {
-      const projectTasks = tasks.filter((task) => task.project_id === project.id);
+      const projectTasks = getProjectTasks(tasks, project.id);
       const doneTasks = projectTasks.filter((task) => task.done).length;
+      const nextTask = projectTasks.find((task) => !task.done);
       const progress = projectTasks.length
         ? Math.round((doneTasks / projectTasks.length) * 100)
         : 0;
@@ -89,11 +105,18 @@ function renderDigest(
         <div style="padding:16px 0;border-bottom:1px solid #e5e9e5">
           <div style="display:flex;justify-content:space-between;gap:12px">
             <strong style="color:#1f3d35">${escapeHtml(project.title)}</strong>
-            <span style="color:#52645c">${statusLabels[project.status]}</span>
+            <span style="display:inline-block;margin-left:16px;white-space:nowrap;color:#52645c">${statusLabels[project.status]}</span>
           </div>
           <div style="margin-top:7px;color:#52645c">
             Задачи: ${doneTasks} из ${projectTasks.length} · ${progress}%
             ${deadline ? ` · ${deadline}` : ""}
+          </div>
+          <div style="margin-top:7px;color:#24342e">
+            ${
+              nextTask
+                ? `<strong>Следующая задача:</strong> ${escapeHtml(nextTask.title)}`
+                : "Все задачи выполнены"
+            }
           </div>
         </div>
       `;
@@ -134,7 +157,7 @@ function renderDigest(
             }
 
             <h2 style="margin-top:26px;font-size:18px">Проекты</h2>
-            ${projectBlocks || '<p style="color:#68786f">Активных проектов пока нет.</p>'}
+            ${projectBlocks || '<p style="color:#68786f">Проектов с задачами пока нет.</p>'}
 
             <a href="${escapeHtml(appUrl)}" style="display:inline-block;margin-top:24px;padding:11px 16px;border-radius:8px;background:#35695d;color:#fff;text-decoration:none;font-weight:700">
               Открыть Loom
@@ -158,9 +181,12 @@ function renderDigest(
     "",
     "Проекты:",
     ...visibleProjects.map((project) => {
-      const projectTasks = tasks.filter((task) => task.project_id === project.id);
+      const projectTasks = getProjectTasks(tasks, project.id);
       const doneTasks = projectTasks.filter((task) => task.done).length;
-      return `- ${project.title}: ${statusLabels[project.status]}, задачи ${doneTasks}/${projectTasks.length}`;
+      const nextTask = projectTasks.find((task) => !task.done);
+      return `- ${project.title}: ${statusLabels[project.status]}, задачи ${doneTasks}/${projectTasks.length}${
+        nextTask ? `, следующая задача: ${nextTask.title}` : ", все задачи выполнены"
+      }`;
     }),
     "",
     appUrl,
@@ -237,7 +263,7 @@ Deno.serve(async (request) => {
           .eq("user_id", setting.user_id),
         admin
           .from("project_tasks")
-          .select("project_id,title,done,due_date")
+          .select("project_id,parent_task_id,title,done,position,due_date")
           .eq("user_id", setting.user_id),
       ]);
 
