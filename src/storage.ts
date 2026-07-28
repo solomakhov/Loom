@@ -17,16 +17,15 @@ export const MATERIALS_BUCKET = "materials";
 
 type ProjectRow = {
   id: string;
-  title: string | null;
-  description: string | null;
-  status: ProjectStatus | null;
-  priority: ProjectPriority | null;
+  title: string;
+  description: string;
+  status: ProjectStatus;
+  priority: ProjectPriority;
   start_date: string | null;
   due_date: string | null;
-  icon: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-  data?: Project | null;
+  icon: string;
+  created_at: string;
+  updated_at: string;
 };
 
 type ProjectTagRow = {
@@ -249,20 +248,20 @@ function buildProjectFromRows(
 
   return normalizeProject({
     id: projectRow.id,
-    title: projectRow.title ?? projectRow.data?.title ?? "Untitled project",
-    description: projectRow.description ?? projectRow.data?.description ?? "",
-    status: projectRow.status ?? projectRow.data?.status ?? "active",
-    priority: projectRow.priority ?? projectRow.data?.priority ?? "medium",
-    startDate: dateFromDb(projectRow.start_date) || projectRow.data?.startDate || "",
-    dueDate: dateFromDb(projectRow.due_date) || projectRow.data?.dueDate || "",
+    title: projectRow.title,
+    description: projectRow.description,
+    status: projectRow.status,
+    priority: projectRow.priority,
+    startDate: dateFromDb(projectRow.start_date),
+    dueDate: dateFromDb(projectRow.due_date),
     tags: tagRows
       .filter((tag) => tag.project_id === projectRow.id)
       .map((tag) => tag.tag),
-    icon: projectRow.icon ?? projectRow.data?.icon ?? "L",
+    icon: projectRow.icon,
     progress: 0,
     tasks,
-    createdAt: timestampFromDb(projectRow.created_at) || projectRow.data?.createdAt || new Date().toISOString(),
-    updatedAt: timestampFromDb(projectRow.updated_at) || projectRow.data?.updatedAt || new Date().toISOString(),
+    createdAt: timestampFromDb(projectRow.created_at),
+    updatedAt: timestampFromDb(projectRow.updated_at),
   });
 }
 
@@ -413,7 +412,7 @@ export async function loadWorkspace(): Promise<WorkspaceData> {
 
   const { data: projectRows, error: projectsError } = await supabase
     .from(SUPABASE_PROJECTS_TABLE)
-    .select("id,title,description,status,priority,start_date,due_date,icon,created_at,updated_at,data")
+    .select("id,title,description,status,priority,start_date,due_date,icon,created_at,updated_at")
     .order("updated_at", { ascending: false });
 
   if (projectsError) {
@@ -502,7 +501,6 @@ export async function saveWorkspace(workspace: WorkspaceData) {
     start_date: emptyToNull(project.startDate),
     due_date: emptyToNull(project.dueDate),
     icon: project.icon,
-    data: normalizeProject(project),
     created_at: project.createdAt,
     updated_at: project.updatedAt,
   }));

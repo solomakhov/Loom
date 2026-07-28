@@ -1,44 +1,52 @@
-# Loom Database Model
+# Модель базы данных Loom
 
-Last updated: 2026-07-22
+Последнее обновление: 2026-07-28
 
-## Direction
+## Направление развития
 
-The initial MVP stored one row per project in `projects.data` as JSONB. That was acceptable for a fast start, but it becomes limiting for:
+Первоначальная версия MVP хранила каждый проект одной строкой в
+`projects.data` в формате JSONB. Такой подход позволил быстро начать разработку,
+но стал ограничением для следующих возможностей:
 
-- subtasks
-- task ordering
-- material links to multiple objects
-- free materials
-- search inside tasks/materials
-- future collaboration
+- подзадачи;
+- порядок задач;
+- связь материала с несколькими объектами;
+- свободные материалы;
+- поиск внутри задач и материалов;
+- будущая совместная работа.
 
-The next database direction is normalized relational storage.
+Теперь Loom использует нормализованное реляционное хранилище. Устаревшая
+JSONB-колонка временно сохранялась на время перехода и удаляется завершающей
+миграцией совместимости.
 
-## Migration Files
+## Файлы миграций
 
-Versioned migrations live in:
+Версионируемые миграции находятся в каталоге:
 
 ```text
 supabase/migrations/
 ```
 
-Current migration:
+Текущие миграции:
 
 ```text
 202607220001_normalize_project_data.sql
 202607220002_project_title_compatibility.sql
+202607230001_task_details.sql
+202607240001_material_files.sql
+202607280001_remove_legacy_project_data.sql
 ```
 
-Apply migrations manually through Supabase SQL Editor for now. Later, this can be moved to Supabase CLI.
+Миграции проверяются и развёртываются с помощью Supabase CLI. Локальные команды
+и настройка CI описаны в `docs/database-migrations.md`.
 
-## Tables
+## Таблицы
 
 ### `projects`
 
-User-owned project records.
+Проекты, принадлежащие пользователям.
 
-Important columns:
+Основные колонки:
 
 - `id`
 - `user_id`
@@ -51,21 +59,18 @@ Important columns:
 - `icon`
 - `created_at`
 - `updated_at`
-- `data`
-
-`data` remains temporarily as a legacy backup during migration from the JSONB model. The frontend now reads and writes normalized tables, while still writing `data` for compatibility during the transition.
 
 ### `project_tags`
 
-Tags are separated from project JSON.
+Метки вынесены из JSON проекта в отдельную таблицу.
 
-Key columns:
+Основные колонки:
 
 - `project_id`
 - `user_id`
 - `tag`
 
-Primary key:
+Первичный ключ:
 
 ```text
 (project_id, tag)
@@ -73,9 +78,9 @@ Primary key:
 
 ### `project_tasks`
 
-Tasks and subtasks.
+Задачи и подзадачи.
 
-Key columns:
+Основные колонки:
 
 - `id`
 - `user_id`
@@ -87,26 +92,26 @@ Key columns:
 - `created_at`
 - `updated_at`
 
-Subtasks are represented by `parent_task_id`.
+Подзадачи представлены через `parent_task_id`.
 
-Ordering is represented by `position`. Ordering is scoped by:
+Порядок определяется полем `position` в пределах:
 
 ```text
 project_id + parent_task_id
 ```
 
-Top-level tasks have `parent_task_id = null`.
+У задач верхнего уровня `parent_task_id = null`.
 
 ### `materials`
 
-Materials are independent user-owned documents.
+Материалы — самостоятельные документы, принадлежащие пользователям.
 
-Key columns:
+Основные колонки:
 
 - `id`
 - `user_id`
 - `title`
-- `kind` (`text` or `pdf`)
+- `kind` (`text` или `pdf`)
 - `markdown`
 - `file_path`
 - `file_name`
@@ -115,14 +120,16 @@ Key columns:
 - `created_at`
 - `updated_at`
 
-Materials do not directly belong to a single project or task. This is required for multiple links and free materials.
-PDF binaries are stored in the private Supabase Storage bucket `materials`; the table contains only file metadata.
+Материалы не принадлежат напрямую одному проекту или задаче. Это позволяет
+связывать один материал с несколькими объектами и хранить свободные материалы.
+PDF-файлы находятся в закрытом бакете Supabase Storage `materials`, а таблица
+содержит только метаданные файлов.
 
 ### `material_links`
 
-Links materials to projects or tasks.
+Связывает материалы с проектами или задачами.
 
-Key columns:
+Основные колонки:
 
 - `id`
 - `user_id`
@@ -131,61 +138,63 @@ Key columns:
 - `task_id`
 - `created_at`
 
-Rules:
+Правила:
 
-- one link targets exactly one object: project or task
-- one material can have many links
-- a material with no links is a free material
+- одна связь указывает ровно на один объект: проект или задачу;
+- у одного материала может быть несколько связей;
+- материал без связей считается свободным.
 
-## User Separation
+## Разделение данных пользователей
 
-Every user-owned table has `user_id`.
+Каждая таблица с пользовательскими данными содержит `user_id`.
 
-RLS policies restrict access to rows where:
+Политики RLS разрешают доступ только к строкам, для которых:
 
 ```sql
 auth.uid() = user_id
 ```
 
-This prevents objects from different users from mixing in reads/writes.
+Благодаря этому данные разных пользователей не смешиваются при чтении
+и записи.
 
-## Migration Strategy
+## Стратегия миграции
 
-The first normalization migration:
+Последовательность миграций:
 
-1. Creates migration bookkeeping with `schema_migrations`.
-2. Keeps the existing `projects` table.
-3. Adds relational columns to `projects`.
-4. Migrates `projects.data` fields into relational columns.
-5. Creates `project_tags`, `project_tasks`, `materials`, and `material_links`.
-6. Migrates nested JSON tasks/materials/tags into those tables.
-7. Keeps `projects.data` for rollback/compatibility during the frontend transition.
+1. Добавляет нормализованные колонки проектов и создаёт таблицы меток, задач,
+   материалов и связей.
+2. Переносит устаревшие значения JSON в нормализованные таблицы.
+3. Добавляет подробные поля задач и хранение PDF-материалов.
+4. Выполняет завершающий проход восстановления устаревших меток, задач
+   и материалов.
+5. Проверяет, что каждая устаревшая задача существует в `project_tasks`.
+6. Удаляет триггер совместимости, `projects.data` и устаревшую публичную таблицу
+   учёта миграций.
 
-The second compatibility migration:
+## Состояние перехода фронтенда
 
-1. Backfills missing project titles.
-2. Sets a safe default for `projects.title`.
-3. Adds a trigger that fills relational project columns from legacy `projects.data` when an older client sends only JSON data.
+Слой хранения фронтенда:
 
-## Frontend Transition Status
+1. Читает проекты из нормализованных колонок `projects`.
+2. Читает метки из `project_tags`.
+3. Читает задачи из `project_tasks`.
+4. Читает материалы из `materials`.
+5. Читает все связи материалов из `material_links`.
+6. Записывает изменения обратно в нормализованные таблицы.
+7. Хранит материалы в общем каталоге рабочего пространства, поэтому материалы
+   без связей сохраняются после перезагрузки.
+8. Поддерживает несколько связей с проектами и задачами через отдельное окно.
+9. Загружает PDF-файлы в закрытый бакет `materials`.
 
-The frontend storage layer now:
+Фронтенд больше не читает и не записывает `projects.data`.
 
-1. Reads projects from normalized `projects` columns.
-2. Reads tags from `project_tags`.
-3. Reads tasks from `project_tasks`.
-4. Reads materials from `materials`.
-5. Reads all material relationships from `material_links`.
-6. Writes updates back into those normalized tables.
-7. Still writes `projects.data` as a legacy backup.
-8. Keeps materials in a workspace-level catalog, so unlinked materials survive reloads.
-9. Supports multiple project/task links through a dedicated link dialog.
-10. Uploads PDF files to the private `materials` bucket.
+## Правило работы со схемой
 
-The remaining compatibility step is to remove dependency on `projects.data` after production data is verified.
+Изменения схемы должны оформляться новыми файлами в `supabase/migrations/`.
 
-## Operational Rule
+Нельзя редактировать уже применённые в рабочей среде миграции. Вместо этого
+необходимо добавить новую миграцию.
 
-Schema changes should be represented as new files in `supabase/migrations/`.
-
-Do not edit already-applied migration files after production use. Add a new migration instead.
+В пул-реквестах вся цепочка миграций проверяется на новой локальной базе данных.
+После слияния с `main` ожидающие миграции развёртываются через защищённое
+окружение GitHub `production`.

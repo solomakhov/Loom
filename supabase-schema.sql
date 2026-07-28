@@ -5,6 +5,8 @@
 --
 --   supabase/migrations/
 --
--- Current migration:
+-- Use Supabase CLI rather than this file:
 --
---   supabase/migrations/202607220001_normalize_project_data.sql
+--   npm run db:reset
+--   npm run db:push:dry-run
+--   npm run db:push

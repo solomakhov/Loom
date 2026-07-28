@@ -2,7 +2,13 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:reset": "supabase db reset",
+    "db:migrations": "supabase migration list",
+    "db:push": "supabase db push",
+    "db:push:dry-run": "supabase db push --dry-run"
   },
   "dependencies": {
     "@mdxeditor/editor": "^4.0.4",
@@ -16,6 +22,7 @@
   },
   "devDependencies": {
     "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3"
+    "@types/react-dom": "^19.2.3",
+    "supabase": "^2.84.2"
   }
 }

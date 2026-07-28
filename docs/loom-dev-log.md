@@ -1,26 +1,28 @@
-# Loom Dev Log
+# Журнал разработки Loom
 
-Last updated: 2026-07-22
+Последнее обновление: 2026-07-28
 
-## Project Summary
+## Кратко о проекте
 
-Loom is a Vite + React project-management MVP. The current app supports projects, tasks, tags, statuses, priorities, and Markdown materials inside each project.
+Loom — MVP-система управления проектами на Vite и React. Приложение
+поддерживает проекты, задачи, метки, статусы, приоритеты и Markdown-материалы.
 
-The frontend is deployed as a static site on Vercel. Data is stored in Supabase Postgres through the Supabase JavaScript client, called directly from the browser.
+Фронтенд развёрнут как статический сайт на Vercel. Данные хранятся в Supabase
+Postgres. Браузер обращается к базе напрямую через JavaScript-клиент Supabase.
 
-## Current Stack
+## Текущий стек
 
-- Frontend: React 19, TypeScript, Vite
-- UI icons: lucide-react
-- Markdown editor: `@mdxeditor/editor`
-- Hosting: Vercel
-- Database/Auth: Supabase
-- Build command: `npm run build`
-- Publish directory: `dist`
+- Фронтенд: React 19, TypeScript, Vite
+- Иконки интерфейса: lucide-react
+- Редактор Markdown: `@mdxeditor/editor`
+- Хостинг: Vercel
+- База данных и авторизация: Supabase
+- Команда сборки: `npm run build`
+- Каталог публикации: `dist`
 
-## Environment Variables
+## Переменные окружения
 
-Required in Vercel:
+Обязательные переменные в Vercel:
 
 ```env
 VITE_SUPABASE_URL=
@@ -28,47 +30,38 @@ VITE_SUPABASE_ANON_KEY=
 VITE_APP_URL=
 ```
 
-Local example is stored in `.env.example`.
+Локальный пример находится в `.env.example`.
 
-`VITE_APP_URL` must point to the public production Vercel domain from the
-project's `Domains` section, not to a per-deployment preview URL.
+`VITE_APP_URL` должен указывать на публичный рабочий домен Vercel из раздела
+проекта `Domains`, а не на адрес предварительного развёртывания.
 
-## Deployment Notes
+## Развёртывание
 
-The app is a static frontend. It does not require a VPS or a long-running Node.js server.
+Приложение является статическим фронтендом. Для него не требуется VPS или
+постоянно запущенный сервер Node.js.
 
-Recommended hosting setup:
+Рекомендуемая конфигурация хостинга:
 
-- Vercel project connected to the GitHub repository
-- Build command: `npm run build`
-- Output directory: `dist`
-- Supabase variables set in Vercel project settings
+- проект Vercel связан с репозиторием GitHub;
+- команда сборки: `npm run build`;
+- каталог результата: `dist`;
+- переменные Supabase заданы в настройках проекта Vercel.
 
-After changing environment variables in Vercel, redeploy the project.
+После изменения переменных окружения в Vercel необходимо выполнить повторное
+развёртывание.
 
-## Supabase Setup
+## Настройка Supabase
 
-The database schema is stored in `supabase-schema.sql`.
-
-Note: `supabase-schema.sql` is now deprecated. Use versioned migrations in:
+Схема базы данных управляется версионируемыми миграциями из каталога:
 
 ```text
 supabase/migrations/
 ```
 
-Current table:
+Файл `supabase-schema.sql` устарел и оставлен только как указатель на новый
+процесс.
 
-```text
-projects
-  id text primary key
-  user_id uuid default auth.uid()
-  data jsonb
-  updated_at timestamptz
-```
-
-The initial MVP stored one row in `projects` per Loom project and nested tasks/materials inside `data`.
-
-The project is now moving to normalized tables:
+Текущие нормализованные таблицы:
 
 ```text
 projects
@@ -78,186 +71,197 @@ materials
 material_links
 ```
 
-`projects.data` remains as a legacy backup during the transition.
+Первоначальная версия MVP хранила задачи и материалы внутри `projects.data`.
+Переход на нормализованные таблицы завершён 28 июля 2026 года.
 
-## Row Level Security
+## Защита строк
 
-RLS is enabled on `projects`.
+RLS включён для всех таблиц с пользовательскими данными.
 
-Policies allow authenticated users to:
+Политики разрешают авторизованным пользователям:
 
-- read their own projects
-- insert their own projects
-- update their own projects
-- delete their own projects
+- читать собственные данные;
+- добавлять собственные данные;
+- изменять собственные данные;
+- удалять собственные данные.
 
-The frontend uses the Supabase anon key. This is acceptable only because RLS is enabled and tied to `auth.uid()`.
+Фронтенд использует публичный ключ Supabase `anon`. Это допустимо только потому,
+что RLS включён и доступ ограничивается через `auth.uid()`.
 
-## Auth
+## Авторизация
 
-Auth uses Supabase email + password.
+Для авторизации используется Supabase с email и паролем.
 
-The app now:
+Приложение:
 
-- checks the current Supabase session on load
-- shows an email/password sign-in screen when no session exists
-- supports sign-up with email/password
-- supports password reset through Supabase recovery email
-- has a sign-out button in the sidebar
+- проверяет текущую сессию Supabase при загрузке;
+- показывает форму входа по email и паролю, если сессии нет;
+- поддерживает регистрацию по email и паролю;
+- поддерживает сброс пароля через письмо восстановления Supabase;
+- содержит кнопку выхода в боковой панели.
 
-Password recovery is intentionally handled defensively:
+Восстановление пароля намеренно обрабатывается с дополнительными проверками:
 
-- reset emails are requested with `supabase.auth.resetPasswordForEmail`
-- redirect URL is built from `VITE_APP_URL`
-- recovery route is `/?mode=recovery`
-- the app supports PKCE recovery URLs with `?code=...`
-- the app supports implicit recovery URLs with `#access_token=...`
-- recovery state is also tracked in `localStorage` as `loom.passwordRecoveryRequested`
+- письма запрашиваются через `supabase.auth.resetPasswordForEmail`;
+- адрес перенаправления строится из `VITE_APP_URL`;
+- маршрут восстановления: `/?mode=recovery`;
+- поддерживаются PKCE-адреса восстановления с `?code=...`;
+- поддерживаются неявные адреса восстановления с `#access_token=...`;
+- состояние восстановления дополнительно хранится в `localStorage` под ключом
+  `loom.passwordRecoveryRequested`.
 
-Required Supabase dashboard settings:
+Обязательные настройки панели Supabase:
 
-- Email provider enabled
-- `Site URL` set to the public production Vercel domain
-- `Redirect URLs` include the public production Vercel domain
-- `Redirect URLs` include `https://<production-domain>/?mode=recovery`
-- `Redirect URLs` include `http://localhost:5173/**` for local development
+- включён провайдер Email;
+- `Site URL` указывает на публичный рабочий домен Vercel;
+- `Redirect URLs` содержит публичный рабочий домен Vercel;
+- `Redirect URLs` содержит `https://<production-domain>/?mode=recovery`;
+- `Redirect URLs` содержит `http://localhost:5173/**` для локальной разработки.
 
-Do not use Vercel per-deployment preview URLs for Supabase Auth redirects.
-Those URLs may be protected by Vercel Deployment Protection and can strip or
-consume Supabase recovery parameters before the app receives them.
+Не используйте адреса отдельных предварительных развёртываний Vercel для
+перенаправлений Supabase Auth. Они могут быть защищены Vercel Deployment
+Protection, из-за чего параметры восстановления будут удалены или обработаны
+до загрузки приложения.
 
-## Saving Behavior
+## Сохранение данных
 
-The app now shows a save-status indicator:
+Приложение показывает состояние сохранения:
 
 - `Сохранено`
 - `Сохраняем...`
 - `Есть несохраненные изменения`
 - `Ошибка сохранения`
 
-Structural changes save immediately:
+Структурные изменения сохраняются сразу:
 
-- create/edit project
-- archive/delete project
-- create/delete task
-- toggle task
-- create/delete material
+- создание и редактирование проекта;
+- архивация и удаление проекта;
+- создание и удаление задачи;
+- изменение состояния задачи;
+- создание и удаление материала.
 
-Text-heavy material edits are debounced by 800 ms:
+Изменения большого текстового содержимого сохраняются с задержкой 800 мс:
 
-- material markdown
-- material title
+- Markdown материала;
+- название материала.
 
-This reduces unnecessary Supabase writes while keeping the UI responsive.
+Это уменьшает количество лишних записей в Supabase, сохраняя отзывчивость
+интерфейса.
 
-## Delete Safety
+## Безопасность удаления
 
-Deletion now requires confirmation through `window.confirm` for:
+Удаление следующих объектов требует подтверждения через `window.confirm`:
 
-- projects
-- tasks
-- materials
+- проекты;
+- задачи;
+- материалы.
 
-This is a simple MVP-level safeguard. A custom modal can replace it later.
+Для MVP этого достаточно. В дальнейшем браузерное подтверждение можно заменить
+собственным модальным окном.
 
-## Material Switching Bug
+## Ошибка переключения материалов
 
-There was a bug where switching between materials appeared not to update the editor content.
+Ранее при переключении материалов содержимое редактора визуально не менялось.
 
-The effective fix was adding:
+Рабочим исправлением стало добавление:
 
 ```tsx
 key={selectedMaterial.id}
 ```
 
-to `MaterialEditor` usage in `App.tsx`.
+к использованию `MaterialEditor` в `App.tsx`.
 
-Later attempted fixes were reverted after discovering the original fix worked once the deployed page was freshly opened. The issue was likely affected by browser tab/cache state rather than the final React logic.
+Более поздние варианты исправления были отменены, когда выяснилось, что исходное
+решение работает после открытия развёрнутой страницы в новой вкладке. Вероятно,
+на наблюдаемое поведение влияли состояние вкладки браузера или кеш, а не итоговая
+логика React.
 
-## Local Verification
+## Локальная проверка
 
-Run:
+Запустите:
 
 ```powershell
 npm run build
 ```
 
-Expected result:
+Ожидаемый результат:
 
-- TypeScript passes
-- Vite production build succeeds
-- Vite may warn about a large JS chunk because `@mdxeditor/editor` is heavy
+- проверка TypeScript проходит;
+- рабочая сборка Vite завершается успешно;
+- Vite может предупредить о крупном фрагменте JavaScript, поскольку
+  `@mdxeditor/editor` имеет большой размер.
 
-For local development:
+Для локальной разработки:
 
 ```powershell
 npm run dev
 ```
 
-Then open:
+Затем откройте:
 
 ```text
 http://127.0.0.1:5173
 ```
 
-## Operational Notes
+## Эксплуатационные заметки
 
-If Vercel deployment appears successful but behavior does not change:
+Если развёртывание Vercel завершилось успешно, но поведение приложения не
+изменилось:
 
-- close the browser tab and open the site again
-- try hard refresh
-- check that the latest commit is the active Vercel deployment
-- check that Vercel environment variables are set for the correct environment
+- закройте вкладку браузера и откройте сайт заново;
+- выполните принудительное обновление;
+- убедитесь, что последняя версия является активным развёртыванием Vercel;
+- проверьте, что переменные Vercel заданы для нужного окружения.
 
-If Supabase has no tables after adding Vercel variables, this is expected. Environment variables do not create schema. Run `supabase-schema.sql` in Supabase SQL Editor.
+Если после добавления переменных Vercel в Supabase нет таблиц, это ожидаемо:
+переменные окружения не создают схему. Примените миграции с помощью Supabase CLI,
+как описано в `docs/database-migrations.md`.
 
-## Next MVP Candidates
+## Следующие кандидаты для MVP
 
-Recommended next improvements:
+Рекомендуемые улучшения:
 
-- render and edit nested subtasks
-- reorder tasks and subtasks
-- link/unlink materials to projects and tasks
-- support materials linked to multiple objects
-- add a free-materials view for unlinked materials
-- search inside material markdown
-- export project to JSON or Markdown
-- replace browser `confirm` with app-level confirmation modal
-- add explicit migration/backfill tooling
-- split the large editor bundle with dynamic import
+- экспорт проекта в JSON или Markdown;
+- замена браузерного `confirm` на подтверждение внутри приложения;
+- динамическая загрузка крупного пакета редактора;
+- ежедневная email-рассылка о состоянии проектов;
+- серверный полнотекстовый поиск;
+- ограниченный ИИ-ассистент для создания материалов.
 
-## 2026-07-22 Work Session
+## Рабочая сессия 2026-07-22
 
-### Goal
+### Цель
 
-Move Loom from a local/prototype shape toward a usable hosted MVP:
+Перевести Loom из локального прототипа в пригодный для использования
+развёрнутый MVP:
 
-- host the app on Vercel
-- store data in Supabase Postgres
-- separate user data by authenticated Supabase users
-- prepare the database model for subtasks and flexible material links
-- make auth usable with email/password
+- разместить приложение на Vercel;
+- хранить данные в Supabase Postgres;
+- разделять данные авторизованных пользователей;
+- подготовить модель базы данных для подзадач и гибких связей материалов;
+- сделать удобную авторизацию по email и паролю.
 
-### Hosting And Runtime
+### Хостинг и среда выполнения
 
-Vercel is used as static hosting for the Vite app.
+Vercel используется для статического размещения приложения Vite.
 
-Important hosting conclusions:
+Основные выводы по хостингу:
 
-- The app does not need a VPS or a long-running backend server for the current MVP.
-- Vercel build command is `npm run build`.
-- Vercel output directory is `dist`.
-- Environment variables must be set in the Vercel project settings.
-- After changing Vercel environment variables, redeploy the project.
+- текущему MVP не нужен VPS или постоянно запущенный сервер;
+- команда сборки Vercel: `npm run build`;
+- каталог результата Vercel: `dist`;
+- переменные окружения задаются в настройках проекта Vercel;
+- после изменения переменных необходимо повторное развёртывание.
 
-Important domain rule:
+Важное правило для домена:
 
-- Use the stable production domain from Vercel `Domains`.
-- Do not use per-deployment URLs from the `Deployments` list for Supabase Auth redirects.
+- используйте стабильный рабочий домен из раздела Vercel `Domains`;
+- не используйте адреса из списка `Deployments` для перенаправлений Supabase
+  Auth.
 
-### Supabase Configuration
+### Конфигурация Supabase
 
-Required Vercel variables:
+Обязательные переменные Vercel:
 
 ```env
 VITE_SUPABASE_URL=https://<project-ref>.supabase.co
@@ -265,10 +269,10 @@ VITE_SUPABASE_ANON_KEY=<anon-public-key>
 VITE_APP_URL=https://<production-domain>.vercel.app
 ```
 
-`VITE_SUPABASE_ANON_KEY` is the Supabase `anon public` key. Never put the
-`service_role` key in the frontend.
+`VITE_SUPABASE_ANON_KEY` — публичный ключ Supabase `anon`. Никогда не помещайте
+ключ `service_role` во фронтенд.
 
-Required Supabase Auth URL configuration:
+Обязательная настройка адресов Supabase Auth:
 
 ```text
 Site URL:
@@ -280,25 +284,25 @@ https://<production-domain>.vercel.app/?mode=recovery
 http://localhost:5173/**
 ```
 
-### Database Work
+### Работа с базой данных
 
-The initial data model stored one row per project in `projects.data` as JSONB.
-That was useful for speed, but insufficient for the planned model.
+Первоначальная модель хранила каждый проект одной строкой в `projects.data`
+в формате JSONB. Это ускорило старт, но не подходило для запланированной модели.
 
-The project now has versioned migrations in:
+В проект были добавлены версионируемые миграции:
 
 ```text
 supabase/migrations/
 ```
 
-Current migrations:
+Первые миграции:
 
 ```text
 202607220001_normalize_project_data.sql
 202607220002_project_title_compatibility.sql
 ```
 
-Tables created or normalized:
+Созданные или нормализованные таблицы:
 
 - `projects`
 - `project_tags`
@@ -306,64 +310,86 @@ Tables created or normalized:
 - `materials`
 - `material_links`
 
-Every user-owned table has `user_id`, and RLS policies keep user data separated
-by `auth.uid()`.
+Каждая таблица с пользовательскими данными содержит `user_id`, а политики RLS
+разделяют данные по `auth.uid()`.
 
-The frontend storage layer now reads and writes normalized tables while still
-writing `projects.data` as a compatibility backup.
+На этом этапе слой хранения фронтенда уже читал и записывал нормализованные
+таблицы, продолжая сохранять резервную совместимую копию в `projects.data`.
 
-### Auth Work
+### Работа над авторизацией
 
-Auth evolved in several steps:
+Авторизация развивалась в несколько этапов:
 
-1. Anonymous/local-style access was replaced with Supabase Auth.
-2. Magic-link auth was added first.
-3. The flow was switched to email/password.
-4. Sign-up and sign-in modes were added to the auth screen.
-5. Password reset UI was added for users created before password auth existed.
-6. Recovery links were fixed to use the public production domain through `VITE_APP_URL`.
+1. Анонимный локальный доступ заменён на Supabase Auth.
+2. Сначала добавлена авторизация по magic link.
+3. Затем выполнен переход на email и пароль.
+4. На экран авторизации добавлены режимы регистрации и входа.
+5. Добавлен интерфейс сброса пароля для пользователей, созданных до перехода
+   на парольную авторизацию.
+6. Ссылки восстановления переведены на публичный рабочий домен через
+   `VITE_APP_URL`.
 
-The final recovery issue was not caused only by frontend logic. The recovery
-link was going through a Vercel-protected deployment URL, so the browser reached
-Vercel login instead of the Loom app. Using the stable production domain fixed
-the flow.
+Итоговая проблема восстановления была связана не только с фронтендом. Ссылка
+проходила через защищённый адрес развёртывания Vercel, поэтому браузер открывал
+страницу входа Vercel вместо Loom. Переход на стабильный рабочий домен исправил
+процесс.
 
-### UI/UX Work
+### Работа над интерфейсом
 
-MVP UI improvements completed:
+Выполненные улучшения MVP:
 
-- save status indicator
-- debounced material text saving
-- delete confirmations for projects, tasks, and materials
-- material switching fix using a keyed editor instance
-- sidebar sign-out button
-- auth screen for sign-in, sign-up, and password reset
+- индикатор состояния сохранения;
+- сохранение текста материала с задержкой;
+- подтверждение удаления проектов, задач и материалов;
+- исправление переключения материалов через экземпляр редактора с ключом;
+- кнопка выхода в боковой панели;
+- экран входа, регистрации и сброса пароля.
 
-### Bugs Resolved
+### Исправленные ошибки
 
-Material switching:
+Переключение материалов:
 
-- Symptom: selecting another material did not update editor content.
-- Fix: force `MaterialEditor` remount by passing `key={selectedMaterial.id}`.
+- Проявление: при выборе другого материала содержимое редактора не менялось.
+- Исправление: принудительно пересоздавать `MaterialEditor`, передавая
+  `key={selectedMaterial.id}`.
 
-Project creation after normalized migration:
+Создание проекта после нормализующей миграции:
 
-- Symptom: `null value in column "title" of relation "projects" violates not-null constraint`.
-- Fix: compatibility migration backfilled titles and added safe handling for older JSON-style writes.
+- Проявление:
+  `null value in column "title" of relation "projects" violates not-null constraint`.
+- Исправление: миграция совместимости заполнила отсутствующие названия
+  и добавила безопасную обработку старого формата записи JSON.
 
-Password recovery:
+Восстановление пароля:
 
-- Symptom: recovery link opened the app as signed-in instead of showing password change.
-- Frontend fixes: explicit recovery mode, `?code=...` handling, hash-token handling.
-- Deployment fix: use public production Vercel domain, not protected deployment URL.
+- Проявление: ссылка восстановления открывала приложение в состоянии обычного
+  входа вместо формы изменения пароля.
+- Исправления фронтенда: явный режим восстановления, обработка `?code=...`
+  и токенов в хеше.
+- Исправление развёртывания: использование публичного рабочего домена Vercel
+  вместо защищённого адреса отдельного развёртывания.
 
-### Current State
+### Состояние на конец сессии
 
-The project is ready for the next UI/data-model pass:
+Проект был готов к следующему этапу интерфейса и модели данных:
 
-- subtasks already have database support through `project_tasks.parent_task_id`
-- task ordering already has database support through `project_tasks.position`
-- independent materials already have database support through `materials`
-- project/task/material relationships already have database support through `material_links`
+- поддержка подзадач уже существовала через `project_tasks.parent_task_id`;
+- порядок задач уже поддерживался через `project_tasks.position`;
+- самостоятельные материалы уже поддерживались через `materials`;
+- связи проектов, задач и материалов уже поддерживались через
+  `material_links`.
 
-The next implementation should focus on exposing this existing model in the UI.
+Следующим шагом должно было стать отображение этой модели в интерфейсе.
+
+## 2026-07-28: завершение перехода на нормализованное хранилище
+
+Фронтенд больше не читает и не записывает `projects.data`. Проекты, метки,
+задачи, материалы и связи используют только нормализованные таблицы.
+
+Миграция `202607280001_remove_legacy_project_data.sql` выполняет завершающее
+восстановление устаревших меток, задач и материалов, проверяет перенос задач,
+после чего удаляет триггер совместимости и JSONB-колонку.
+
+Supabase CLI закреплён как зависимость для разработки. Команды локальной базы
+данных доступны через npm-скрипты, пул-реквесты проверяют всю цепочку миграций,
+а после слияния с `main` ожидающие миграции развёртываются через GitHub Actions.
