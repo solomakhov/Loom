@@ -32,6 +32,7 @@ export const emptyDraft: ProjectDraft = {
 
 export type SaveStatus = "idle" | "pending" | "saving" | "saved" | "error";
 export type ProjectSection = "overview" | "tasks" | "materials";
+export type MaterialScope = "task" | "project" | "all";
 
 export type WorkspaceSearchResult = {
   id: string;

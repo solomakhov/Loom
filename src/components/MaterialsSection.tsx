@@ -1,18 +1,18 @@
 import { FileText, FileUp, Link2, Plus, Trash2 } from "lucide-react";
 import { type ChangeEvent, useRef } from "react";
 import { MaterialEditor } from "../MaterialEditor";
-import { formatFileSize } from "../projectModel";
+import { formatFileSize, type MaterialScope } from "../projectModel";
 import type { Project, ProjectMaterial, ProjectTask } from "../types";
 import { PdfMaterialViewer } from "./PdfMaterialViewer";
 
 type MaterialsSectionProps = {
   project: Project;
   selectedTask?: ProjectTask;
-  materialScope: "context" | "all";
+  materialScope: MaterialScope;
   materials: ProjectMaterial[];
   selectedMaterial?: ProjectMaterial;
   isUploadingPdf: boolean;
-  onMaterialScopeChange: (scope: "context" | "all") => void;
+  onMaterialScopeChange: (scope: MaterialScope) => void;
   onAddMaterial: (project?: Project, taskId?: string) => void;
   onPdfSelected: (event: ChangeEvent<HTMLInputElement>) => void;
   onSelectMaterial: (materialId: string) => void;
@@ -42,30 +42,45 @@ export function MaterialsSection({
   const addContextMaterial = () =>
     onAddMaterial(
       materialScope === "all" ? undefined : project,
-      materialScope === "context" ? selectedTask?.id : undefined,
+      materialScope === "task" ? selectedTask?.id : undefined,
     );
 
   return (
     <section className="section-block materials-section">
       <div className="section-title-row">
         <div>
-          <h3>{selectedTask ? "Материалы задачи" : "Материалы проекта"}</h3>
+          <h3>
+            {materialScope === "task" && selectedTask
+              ? "Материалы задачи"
+              : materialScope === "project"
+                ? "Материалы проекта"
+                : "Все материалы"}
+          </h3>
           <p>
             {materialScope === "all"
               ? "Все документы и PDF, включая материалы без связей."
-              : selectedTask
+              : materialScope === "task" && selectedTask
                 ? `Только материалы задачи «${selectedTask.title}».`
-                : "Только материалы, связанные непосредственно с проектом."}
+                : "Материалы проекта и всех его задач."}
           </p>
         </div>
         <div className="material-section-actions">
           <div className="segmented-control" aria-label="Область материалов">
+            {selectedTask ? (
+              <button
+                className={materialScope === "task" ? "selected" : ""}
+                type="button"
+                onClick={() => onMaterialScopeChange("task")}
+              >
+                Задача
+              </button>
+            ) : null}
             <button
-              className={materialScope === "context" ? "selected" : ""}
+              className={materialScope === "project" ? "selected" : ""}
               type="button"
-              onClick={() => onMaterialScopeChange("context")}
+              onClick={() => onMaterialScopeChange("project")}
             >
-              {selectedTask ? "Задача" : "Проект"}
+              Проект
             </button>
             <button
               className={materialScope === "all" ? "selected" : ""}
@@ -129,9 +144,9 @@ export function MaterialsSection({
             <p className="muted">
               {materialScope === "all"
                 ? "Пока нет материалов."
-                : selectedTask
+                : materialScope === "task" && selectedTask
                   ? "К этой задаче материалы не привязаны."
-                  : "К проекту материалы не привязаны."}
+                  : "У проекта и его задач пока нет материалов."}
             </p>
           )}
         </div>
@@ -187,14 +202,28 @@ export function MaterialsSection({
             </>
           ) : (
             <div className="material-empty">
-              <h3>Здесь пока пусто</h3>
-              <p>
-                Создай документ или загрузи PDF. Связи с проектами и задачами можно изменить позже.
-              </p>
-              <button className="text-button primary" type="button" onClick={addContextMaterial}>
-                <Plus size={16} />
-                Новый документ
-              </button>
+              {materials.length ? (
+                <>
+                  <h3>Выберите материал</h3>
+                  <p>Откройте документ или PDF из списка слева.</p>
+                </>
+              ) : (
+                <>
+                  <h3>Здесь пока пусто</h3>
+                  <p>
+                    Создай документ или загрузи PDF. Связи с проектами и задачами можно изменить
+                    позже.
+                  </p>
+                  <button
+                    className="text-button primary"
+                    type="button"
+                    onClick={addContextMaterial}
+                  >
+                    <Plus size={16} />
+                    Новый документ
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>

@@ -37,6 +37,7 @@ import {
 import { isSupabaseConfigured, supabase } from "./supabase";
 import {
   type ProjectSection,
+  type MaterialScope,
   type SaveStatus,
   type WorkspaceSearchResult,
   calculateProgress,
@@ -62,11 +63,69 @@ import {
   WorkspaceData,
 } from "./types";
 
+const NAVIGATION_STORAGE_PREFIX = "loom:navigation";
 
+type SavedNavigation = {
+  projectId: string;
+  taskId: string;
+  section: ProjectSection;
+  materialScope: MaterialScope;
+  materialId: string;
+};
+
+function getNavigationStorageKey(userId?: string) {
+  return `${NAVIGATION_STORAGE_PREFIX}:${userId ?? "local"}`;
+}
+
+function loadSavedNavigation(userId?: string): SavedNavigation | null {
+  try {
+    const value = window.localStorage.getItem(getNavigationStorageKey(userId));
+
+    if (!value) {
+      return null;
+    }
+
+    const parsed = JSON.parse(value) as Partial<SavedNavigation>;
+    const section = ["overview", "tasks", "materials"].includes(parsed.section ?? "")
+      ? parsed.section as ProjectSection
+      : "tasks";
+    const materialScope = ["task", "project", "all"].includes(parsed.materialScope ?? "")
+      ? parsed.materialScope as MaterialScope
+      : "project";
+
+    return {
+      projectId: typeof parsed.projectId === "string" ? parsed.projectId : "",
+      taskId: typeof parsed.taskId === "string" ? parsed.taskId : "",
+      section,
+      materialScope,
+      materialId: typeof parsed.materialId === "string" ? parsed.materialId : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveNavigation(userId: string | undefined, navigation: SavedNavigation) {
+  try {
+    window.localStorage.setItem(
+      getNavigationStorageKey(userId),
+      JSON.stringify(navigation),
+    );
+  } catch {
+    // Навигация не критична: приложение продолжит работать без localStorage.
+  }
+}
+
+function getLocalDateValue(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 export function App() {
   const saveTimerRef = useRef<number | null>(null);
-  const pendingMaterialNavigationRef = useRef<{ id: string; scope: "context" | "all" } | null>(
+  const pendingMaterialNavigationRef = useRef<{ id: string; scope: MaterialScope } | null>(
     null,
   );
   const latestWorkspaceRef = useRef<WorkspaceData>({ projects: [], materials: [] });
@@ -82,7 +141,7 @@ export function App() {
   const [selectedMaterialId, setSelectedMaterialId] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [projectSection, setProjectSection] = useState<ProjectSection>("tasks");
-  const [materialScope, setMaterialScope] = useState<"context" | "all">("context");
+  const [materialScope, setMaterialScope] = useState<MaterialScope>("project");
   const [linkingMaterialId, setLinkingMaterialId] = useState("");
   const [expandedMaterialLinkProjectIds, setExpandedMaterialLinkProjectIds] = useState<Set<string>>(
     new Set(),
@@ -226,7 +285,35 @@ export function App() {
         latestWorkspaceRef.current = loadedWorkspace;
         setProjects(loadedWorkspace.projects);
         setMaterials(loadedWorkspace.materials);
-        setSelectedId((currentId) => currentId || loadedWorkspace.projects[0]?.id || "");
+        const savedNavigation = loadSavedNavigation(session?.user.id);
+        const restoredProject =
+          loadedWorkspace.projects.find((project) => project.id === savedNavigation?.projectId) ??
+          loadedWorkspace.projects[0];
+        const restoredTask = restoredProject?.tasks.find(
+          (task) => task.id === savedNavigation?.taskId,
+        );
+        const restoredScope =
+          savedNavigation?.materialScope === "task" && !restoredTask
+            ? "project"
+            : savedNavigation?.materialScope ?? "project";
+        const restoredMaterialId = loadedWorkspace.materials.some(
+          (material) => material.id === savedNavigation?.materialId,
+        )
+          ? savedNavigation?.materialId ?? ""
+          : "";
+
+        if (savedNavigation?.section === "materials") {
+          pendingMaterialNavigationRef.current = {
+            id: restoredMaterialId,
+            scope: restoredScope,
+          };
+        }
+
+        setSelectedId(restoredProject?.id ?? "");
+        setSelectedTaskId(restoredTask?.id ?? "");
+        setProjectSection(savedNavigation?.section ?? "tasks");
+        setMaterialScope(restoredScope);
+        setSelectedMaterialId(restoredMaterialId);
         setStorageError("");
         setSaveStatus("saved");
       })
@@ -265,18 +352,24 @@ export function App() {
   const selectedTaskMaterials = selectedTask
     ? materials.filter((material) => material.links.some((link) => link.taskId === selectedTask.id))
     : [];
+  const selectedProjectMaterials = selectedProject
+    ? materials.filter((material) =>
+        material.links.some(
+          (link) =>
+            link.projectId === selectedProject.id ||
+            (link.taskId &&
+              selectedProject.tasks.some((task) => task.id === link.taskId)),
+        ),
+      )
+    : [];
   const contextualMaterials = materialScope === "all"
     ? materials
-    : selectedTask
+    : materialScope === "task"
       ? selectedTaskMaterials
-      : selectedProject
-        ? materials.filter((material) =>
-            material.links.some((link) => link.projectId === selectedProject.id),
-          )
-        : [];
-  const selectedMaterial =
-    contextualMaterials.find((material) => material.id === selectedMaterialId) ??
-    contextualMaterials[0];
+      : selectedProjectMaterials;
+  const selectedMaterial = contextualMaterials.find(
+    (material) => material.id === selectedMaterialId,
+  );
   const linkingMaterial = materials.find((material) => material.id === linkingMaterialId);
 
   useEffect(() => {
@@ -299,9 +392,31 @@ export function App() {
       return;
     }
 
-    setMaterialScope("context");
+    setMaterialScope("project");
     setSelectedMaterialId("");
   }, [selectedId, selectedTaskId]);
+
+  useEffect(() => {
+    if (isLoadingProjects || !selectedProject) {
+      return;
+    }
+
+    saveNavigation(session?.user.id, {
+      projectId: selectedProject.id,
+      taskId: selectedTask?.id ?? "",
+      section: projectSection,
+      materialScope,
+      materialId: selectedMaterial?.id ?? "",
+    });
+  }, [
+    isLoadingProjects,
+    materialScope,
+    projectSection,
+    selectedMaterial?.id,
+    selectedProject?.id,
+    selectedTask?.id,
+    session?.user.id,
+  ]);
 
   const filteredProjects = useMemo(() => {
     return projects.filter(
@@ -383,6 +498,11 @@ export function App() {
     setSelectedMaterialId("");
     setSelectedTaskId("");
     setProjectSection(section);
+  }
+
+  function changeMaterialScope(scope: MaterialScope) {
+    setMaterialScope(scope);
+    setSelectedMaterialId("");
   }
 
   function openSearchResult(result: WorkspaceSearchResult) {
@@ -625,6 +745,7 @@ export function App() {
       done: false,
       parentTaskId,
       position: getTaskSiblings(project.tasks, parentTaskId).length,
+      startDate: getLocalDateValue(),
       createdAt: now,
       updatedAt: now,
     };
@@ -746,6 +867,7 @@ export function App() {
     };
 
     updateMaterials([...materials, material]);
+    setMaterialScope(taskId ? "task" : project ? "project" : "all");
     setSelectedMaterialId(material.id);
     setProjectSection("materials");
   }
@@ -780,7 +902,7 @@ export function App() {
 
     updateMaterials([...latestWorkspaceRef.current.materials, material]);
     setSelectedTaskId(taskId ?? "");
-    setMaterialScope("context");
+    setMaterialScope(taskId ? "task" : "project");
     setSelectedMaterialId(material.id);
     setProjectSection("materials");
     setIsAiAssistantOpen(false);
@@ -906,7 +1028,7 @@ export function App() {
       const now = new Date().toISOString();
       const links: MaterialLink[] = materialScope === "all"
         ? []
-        : selectedTask
+        : materialScope === "task" && selectedTask
           ? [{ taskId: selectedTask.id }]
           : selectedProject
             ? [{ projectId: selectedProject.id }]
@@ -1048,7 +1170,13 @@ export function App() {
                   key={section}
                   type="button"
                   aria-current={projectSection === section ? "page" : undefined}
-                  onClick={() => setProjectSection(section)}
+                  onClick={() => {
+                    if (section === "materials") {
+                      changeMaterialScope("project");
+                    }
+
+                    setProjectSection(section);
+                  }}
                 >
                   {label}
                   {section === "tasks" ? (
@@ -1095,7 +1223,7 @@ export function App() {
                 onAddMaterial={(project, taskId) => addMaterial(project, taskId)}
                 onOpenMaterial={(materialId) => {
                   setProjectSection("materials");
-                  setMaterialScope("context");
+                  setMaterialScope("task");
                   setSelectedMaterialId(materialId);
                 }}
               />
@@ -1109,7 +1237,7 @@ export function App() {
                 materials={contextualMaterials}
                 selectedMaterial={selectedMaterial}
                 isUploadingPdf={isUploadingPdf}
-                onMaterialScopeChange={setMaterialScope}
+                onMaterialScopeChange={changeMaterialScope}
                 onAddMaterial={addMaterial}
                 onPdfSelected={handlePdfSelected}
                 onSelectMaterial={setSelectedMaterialId}
