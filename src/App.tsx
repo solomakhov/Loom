@@ -3,6 +3,7 @@ import type { Session } from "@supabase/supabase-js";
 import {
   Archive,
   Edit3,
+  Menu,
   Plus,
   Sparkles,
   Trash2,
@@ -72,6 +73,73 @@ type SavedNavigation = {
   materialScope: MaterialScope;
   materialId: string;
 };
+
+type UrlNavigation = {
+  hasNavigation: boolean;
+  projectId: string;
+  taskId: string;
+  section: ProjectSection;
+  materialScope: MaterialScope;
+  materialId: string;
+};
+
+function loadUrlNavigation(): UrlNavigation {
+  const params = new URLSearchParams(window.location.search);
+  const hasNavigation = ["project", "task", "section", "scope", "material"].some((key) =>
+    params.has(key),
+  );
+  const sectionValue = params.get("section");
+  const scopeValue = params.get("scope");
+
+  return {
+    hasNavigation,
+    projectId: params.get("project") ?? "",
+    taskId: params.get("task") ?? "",
+    section: ["overview", "tasks", "materials"].includes(sectionValue ?? "")
+      ? sectionValue as ProjectSection
+      : "tasks",
+    materialScope: ["task", "project", "all"].includes(scopeValue ?? "")
+      ? scopeValue as MaterialScope
+      : "project",
+    materialId: params.get("material") ?? "",
+  };
+}
+
+function writeNavigationUrl(navigation: SavedNavigation, mode: "push" | "replace") {
+  const url = new URL(window.location.href);
+  const setOptionalParam = (key: string, value: string) => {
+    if (value) {
+      url.searchParams.set(key, value);
+    } else {
+      url.searchParams.delete(key);
+    }
+  };
+
+  setOptionalParam("project", navigation.projectId);
+  setOptionalParam("task", navigation.taskId);
+  url.searchParams.set("section", navigation.section);
+  setOptionalParam(
+    "scope",
+    navigation.section === "materials" ? navigation.materialScope : "",
+  );
+  setOptionalParam(
+    "material",
+    navigation.section === "materials" ? navigation.materialId : "",
+  );
+
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+
+  if (nextUrl === currentUrl) {
+    return;
+  }
+
+  if (mode === "push") {
+    window.history.pushState({}, "", nextUrl);
+  } else {
+    window.history.replaceState({}, "", nextUrl);
+  }
+}
 
 function getNavigationStorageKey(userId?: string) {
   return `${NAVIGATION_STORAGE_PREFIX}:${userId ?? "local"}`;
@@ -155,10 +223,54 @@ export function App() {
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(() => isRecoveryUrl());
   const [isDigestSettingsOpen, setIsDigestSettingsOpen] = useState(false);
   const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
+  const [isProjectDrawerOpen, setIsProjectDrawerOpen] = useState(false);
+  const [isMobileLayout, setIsMobileLayout] = useState(
+    () => window.matchMedia("(max-width: 860px)").matches,
+  );
+  const mobileProjectButtonRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     latestWorkspaceRef.current = { projects, materials };
   }, [projects, materials]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 860px)");
+    const handleLayoutChange = (event: MediaQueryListEvent) => {
+      setIsMobileLayout(event.matches);
+
+      if (!event.matches) {
+        setIsProjectDrawerOpen(false);
+      }
+    };
+
+    mediaQuery.addEventListener("change", handleLayoutChange);
+    return () => mediaQuery.removeEventListener("change", handleLayoutChange);
+  }, []);
+
+  useEffect(() => {
+    if (!isProjectDrawerOpen || !isMobileLayout) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsProjectDrawerOpen(false);
+        window.requestAnimationFrame(() => mobileProjectButtonRef.current?.focus());
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>(".mobile-sidebar-close")?.focus();
+    });
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isMobileLayout, isProjectDrawerOpen]);
 
   useEffect(() => {
     if (!supabase) {
@@ -286,23 +398,27 @@ export function App() {
         setProjects(loadedWorkspace.projects);
         setMaterials(loadedWorkspace.materials);
         const savedNavigation = loadSavedNavigation(session?.user.id);
+        const urlNavigation = loadUrlNavigation();
+        const restoredNavigation = urlNavigation.hasNavigation
+          ? urlNavigation
+          : savedNavigation;
         const restoredProject =
-          loadedWorkspace.projects.find((project) => project.id === savedNavigation?.projectId) ??
+          loadedWorkspace.projects.find((project) => project.id === restoredNavigation?.projectId) ??
           loadedWorkspace.projects[0];
         const restoredTask = restoredProject?.tasks.find(
-          (task) => task.id === savedNavigation?.taskId,
+          (task) => task.id === restoredNavigation?.taskId,
         );
         const restoredScope =
-          savedNavigation?.materialScope === "task" && !restoredTask
+          restoredNavigation?.materialScope === "task" && !restoredTask
             ? "project"
-            : savedNavigation?.materialScope ?? "project";
+            : restoredNavigation?.materialScope ?? "project";
         const restoredMaterialId = loadedWorkspace.materials.some(
-          (material) => material.id === savedNavigation?.materialId,
+          (material) => material.id === restoredNavigation?.materialId,
         )
-          ? savedNavigation?.materialId ?? ""
+          ? restoredNavigation?.materialId ?? ""
           : "";
 
-        if (savedNavigation?.section === "materials") {
+        if (restoredNavigation?.section === "materials") {
           pendingMaterialNavigationRef.current = {
             id: restoredMaterialId,
             scope: restoredScope,
@@ -311,7 +427,7 @@ export function App() {
 
         setSelectedId(restoredProject?.id ?? "");
         setSelectedTaskId(restoredTask?.id ?? "");
-        setProjectSection(savedNavigation?.section ?? "tasks");
+        setProjectSection(restoredNavigation?.section ?? "tasks");
         setMaterialScope(restoredScope);
         setSelectedMaterialId(restoredMaterialId);
         setStorageError("");
@@ -372,6 +488,59 @@ export function App() {
   );
   const linkingMaterial = materials.find((material) => material.id === linkingMaterialId);
 
+  function pushNavigationUrl(overrides: Partial<SavedNavigation>) {
+    writeNavigationUrl(
+      {
+        projectId: selectedProject?.id ?? "",
+        taskId: selectedTask?.id ?? "",
+        section: projectSection,
+        materialScope,
+        materialId: selectedMaterial?.id ?? "",
+        ...overrides,
+      },
+      "push",
+    );
+  }
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const navigation = loadUrlNavigation();
+      const workspace = latestWorkspaceRef.current;
+      const restoredProject =
+        workspace.projects.find((project) => project.id === navigation.projectId) ??
+        workspace.projects[0];
+      const restoredTask = restoredProject?.tasks.find(
+        (task) => task.id === navigation.taskId,
+      );
+      const restoredScope =
+        navigation.materialScope === "task" && !restoredTask
+          ? "project"
+          : navigation.materialScope;
+      const restoredMaterialId = workspace.materials.some(
+        (material) => material.id === navigation.materialId,
+      )
+        ? navigation.materialId
+        : "";
+      const selectionWillChange =
+        restoredProject?.id !== selectedId || (restoredTask?.id ?? "") !== selectedTaskId;
+
+      pendingMaterialNavigationRef.current =
+        navigation.section === "materials" && selectionWillChange
+          ? { id: restoredMaterialId, scope: restoredScope }
+          : null;
+      setSelectedId(restoredProject?.id ?? "");
+      setSelectedTaskId(restoredTask?.id ?? "");
+      setProjectSection(navigation.section);
+      setMaterialScope(restoredScope);
+      setSelectedMaterialId(restoredMaterialId);
+      setIsProjectDrawerOpen(false);
+      window.scrollTo({ top: 0 });
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [selectedId, selectedTaskId]);
+
   useEffect(() => {
     if (!selectedProject || !selectedTaskId) {
       return;
@@ -408,6 +577,17 @@ export function App() {
       materialScope,
       materialId: selectedMaterial?.id ?? "",
     });
+
+    writeNavigationUrl(
+      {
+        projectId: selectedProject.id,
+        taskId: selectedTask?.id ?? "",
+        section: projectSection,
+        materialScope,
+        materialId: selectedMaterial?.id ?? "",
+      },
+      "replace",
+    );
   }, [
     isLoadingProjects,
     materialScope,
@@ -494,19 +674,75 @@ export function App() {
   }, [materials, projects, query]);
 
   function openProject(projectId: string, section: ProjectSection = "tasks") {
+    pushNavigationUrl({
+      projectId,
+      taskId: "",
+      section,
+      materialScope: "project",
+      materialId: "",
+    });
     setSelectedId(projectId);
     setSelectedMaterialId("");
     setSelectedTaskId("");
     setProjectSection(section);
+    setIsProjectDrawerOpen(false);
   }
 
   function changeMaterialScope(scope: MaterialScope) {
+    pushNavigationUrl({
+      section: "materials",
+      materialScope: scope,
+      materialId: "",
+    });
     setMaterialScope(scope);
     setSelectedMaterialId("");
   }
 
+  function openProjectSection(section: ProjectSection) {
+    const nextScope = section === "materials" ? "project" : materialScope;
+
+    pushNavigationUrl({
+      section,
+      materialScope: nextScope,
+      materialId: "",
+    });
+
+    if (section === "materials") {
+      setMaterialScope("project");
+      setSelectedMaterialId("");
+    }
+
+    setProjectSection(section);
+  }
+
+  function openTask(taskId: string) {
+    pushNavigationUrl({
+      taskId,
+      section: "tasks",
+      materialId: "",
+    });
+    setSelectedTaskId(taskId);
+  }
+
+  function openMaterial(materialId: string) {
+    pushNavigationUrl({
+      section: "materials",
+      materialId,
+    });
+    setSelectedMaterialId(materialId);
+  }
+
+  function closeProjectDrawer(restoreFocus = false) {
+    setIsProjectDrawerOpen(false);
+
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => mobileProjectButtonRef.current?.focus());
+    }
+  }
+
   function openSearchResult(result: WorkspaceSearchResult) {
     setQuery("");
+    setIsProjectDrawerOpen(false);
 
     if (result.kind === "project" && result.projectId) {
       openProject(result.projectId, "overview");
@@ -515,6 +751,12 @@ export function App() {
     }
 
     if (result.kind === "task" && result.projectId && result.taskId) {
+      pushNavigationUrl({
+        projectId: result.projectId,
+        taskId: result.taskId,
+        section: "tasks",
+        materialId: "",
+      });
       setSelectedId(result.projectId);
       setSelectedTaskId(result.taskId);
       setSelectedMaterialId("");
@@ -542,6 +784,13 @@ export function App() {
       pendingMaterialNavigationRef.current = selectionWillChange
         ? { id: result.materialId, scope: "all" }
         : null;
+      pushNavigationUrl({
+        projectId: targetProjectId,
+        taskId: "",
+        section: "materials",
+        materialScope: "all",
+        materialId: result.materialId,
+      });
       setSelectedId(targetProjectId);
       setSelectedTaskId("");
       setMaterialScope("all");
@@ -1096,24 +1345,68 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <ProjectSidebar
-        hasSession={Boolean(session)}
-        query={query}
-        statusFilter={statusFilter}
-        searchResults={searchResults}
-        projects={projects}
-        filteredProjects={filteredProjects}
-        selectedProject={selectedProject}
-        onQueryChange={setQuery}
-        onStatusFilterChange={setStatusFilter}
-        onOpenSearchResult={openSearchResult}
-        onOpenProject={openProject}
-        onCreateProject={openCreateForm}
-        onOpenDigestSettings={() => setIsDigestSettingsOpen(true)}
-        onSignOut={signOut}
-      />
+      <div
+        className={isProjectDrawerOpen ? "sidebar-shell open" : "sidebar-shell"}
+        inert={isMobileLayout && !isProjectDrawerOpen}
+      >
+        <ProjectSidebar
+          hasSession={Boolean(session)}
+          query={query}
+          statusFilter={statusFilter}
+          searchResults={searchResults}
+          projects={projects}
+          filteredProjects={filteredProjects}
+          selectedProject={selectedProject}
+          onQueryChange={setQuery}
+          onStatusFilterChange={setStatusFilter}
+          onOpenSearchResult={openSearchResult}
+          onOpenProject={openProject}
+          onCreateProject={() => {
+            closeProjectDrawer();
+            openCreateForm();
+          }}
+          onOpenDigestSettings={() => {
+            closeProjectDrawer();
+            setIsDigestSettingsOpen(true);
+          }}
+          onSignOut={() => {
+            closeProjectDrawer();
+            void signOut();
+          }}
+          onClose={() => closeProjectDrawer(true)}
+        />
+      </div>
 
-      <section className="project-view" aria-label="Обзор проекта">
+      {isMobileLayout && isProjectDrawerOpen ? (
+        <button
+          className="sidebar-backdrop"
+          type="button"
+          onClick={() => closeProjectDrawer(true)}
+          aria-label="Закрыть список проектов"
+        />
+      ) : null}
+
+      <section
+        className="project-view"
+        aria-label="Обзор проекта"
+        inert={isMobileLayout && isProjectDrawerOpen}
+      >
+        <button
+          ref={mobileProjectButtonRef}
+          className="mobile-project-button"
+          type="button"
+          onClick={() => setIsProjectDrawerOpen(true)}
+          aria-expanded={isProjectDrawerOpen}
+          aria-label="Открыть список проектов"
+        >
+          <span className="mobile-project-mark">{selectedProject?.icon ?? "L"}</span>
+          <span className="mobile-project-copy">
+            <small>Текущий проект</small>
+            <strong>{selectedProject?.title ?? "Проекты"}</strong>
+          </span>
+          <Menu size={20} />
+        </button>
+
         <div className={`save-status ${saveStatus}`}>
           {getSaveStatusLabel(saveStatus)}
         </div>
@@ -1170,13 +1463,7 @@ export function App() {
                   key={section}
                   type="button"
                   aria-current={projectSection === section ? "page" : undefined}
-                  onClick={() => {
-                    if (section === "materials") {
-                      changeMaterialScope("project");
-                    }
-
-                    setProjectSection(section);
-                  }}
+                  onClick={() => openProjectSection(section)}
                 >
                   {label}
                   {section === "tasks" ? (
@@ -1213,7 +1500,7 @@ export function App() {
                 materials={selectedTaskMaterials}
                 newTaskTitle={newTaskTitle}
                 onNewTaskTitleChange={setNewTaskTitle}
-                onSelectTask={setSelectedTaskId}
+                onSelectTask={openTask}
                 onAddTask={addTask}
                 onAddSubtask={addSubtask}
                 onToggleTask={toggleTask}
@@ -1222,6 +1509,11 @@ export function App() {
                 onMoveTask={moveTask}
                 onAddMaterial={(project, taskId) => addMaterial(project, taskId)}
                 onOpenMaterial={(materialId) => {
+                  pushNavigationUrl({
+                    section: "materials",
+                    materialScope: "task",
+                    materialId,
+                  });
                   setProjectSection("materials");
                   setMaterialScope("task");
                   setSelectedMaterialId(materialId);
@@ -1240,7 +1532,7 @@ export function App() {
                 onMaterialScopeChange={changeMaterialScope}
                 onAddMaterial={addMaterial}
                 onPdfSelected={handlePdfSelected}
-                onSelectMaterial={setSelectedMaterialId}
+                onSelectMaterial={openMaterial}
                 onRenameMaterial={renameMaterial}
                 onOpenLinks={openMaterialLinks}
                 onDeleteMaterial={deleteMaterial}

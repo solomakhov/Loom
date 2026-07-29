@@ -17,6 +17,7 @@ type ProjectSidebarProps = {
   onCreateProject: () => void;
   onOpenDigestSettings: () => void;
   onSignOut: () => void;
+  onClose?: () => void;
 };
 
 export function ProjectSidebar({
@@ -34,6 +35,7 @@ export function ProjectSidebar({
   onCreateProject,
   onOpenDigestSettings,
   onSignOut,
+  onClose,
 }: ProjectSidebarProps) {
   return (
     <section className="sidebar" aria-label="Проекты">
@@ -43,6 +45,16 @@ export function ProjectSidebar({
           <h1>Проекты</h1>
         </div>
         <div className="sidebar-actions">
+          {onClose ? (
+            <button
+              className="icon-button mobile-sidebar-close"
+              type="button"
+              onClick={onClose}
+              aria-label="Закрыть список проектов"
+            >
+              <X size={18} />
+            </button>
+          ) : null}
           {hasSession ? (
             <>
               <button
