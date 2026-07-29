@@ -1,4 +1,5 @@
 import { ArrowDown, ArrowUp, FileUp, Plus, Trash2, X } from "lucide-react";
+import { MaterialPreview } from "../MaterialEditor";
 import { formatFileSize, type TaskTreeItem } from "../projectModel";
 import type { Project, ProjectMaterial, ProjectTask } from "../types";
 
@@ -313,7 +314,7 @@ export function TaskSection({
                           <small>{formatFileSize(material.fileSize)}</small>
                         </div>
                       ) : (
-                        <pre>{material.markdown || "Материал пока пуст."}</pre>
+                        <MaterialPreview markdown={material.markdown} />
                       )}
                     </details>
                   ))

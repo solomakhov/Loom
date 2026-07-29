@@ -34,6 +34,10 @@ type MaterialEditorProps = {
   onChange: (markdown: string) => void;
 };
 
+type MaterialPreviewProps = {
+  markdown: string;
+};
+
 function looksLikeMarkdown(value: string) {
   return (
     /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s|```|~~~|---\s*$)/m.test(value) ||
@@ -165,5 +169,24 @@ export function MaterialEditor({ markdown, onChange }: MaterialEditorProps) {
         ]}
       />
     </div>
+  );
+}
+
+export function MaterialPreview({ markdown }: MaterialPreviewProps) {
+  return (
+    <MDXEditor
+      className="material-markdown-preview"
+      contentEditableClassName="material-editor-surface material-preview-surface"
+      markdown={markdown || "Материал пока пуст."}
+      readOnly
+      plugins={[
+        headingsPlugin(),
+        listsPlugin(),
+        quotePlugin(),
+        tablePlugin(),
+        thematicBreakPlugin(),
+        linkPlugin(),
+      ]}
+    />
   );
 }

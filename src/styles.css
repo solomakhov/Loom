@@ -1117,8 +1117,28 @@ h3 {
 }
 
 .material-mdx-editor .mdxeditor-toolbar {
+  flex-wrap: wrap;
   border-bottom: 1px solid #d7ddd3;
   background: #f8faf7;
+}
+
+.linked-material .material-markdown-preview {
+  max-height: 280px;
+  overflow: auto;
+  border-top: 1px solid #d9e0d8;
+}
+
+.linked-material .material-preview-surface {
+  min-height: 0;
+  padding: 12px;
+}
+
+.linked-material .material-preview-surface > :first-child {
+  margin-top: 0;
+}
+
+.linked-material .material-preview-surface > :last-child {
+  margin-bottom: 0;
 }
 
 .material-color-controls {
