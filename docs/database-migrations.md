@@ -67,3 +67,6 @@ npm run db:push:dry-run
 
 Настройка и проверка ежедневной почтовой сводки описаны в
 [`daily-digest.md`](daily-digest.md).
+
+Настройка, ограничения и проверка ИИ-ассистента описаны в
+[`ai-assistant.md`](ai-assistant.md).

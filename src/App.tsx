@@ -4,9 +4,12 @@ import {
   Archive,
   Edit3,
   Plus,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
+import type { AiMaterialDraft } from "./aiAssistant";
+import { AiAssistantDialog } from "./components/AiAssistantDialog";
 import {
   AuthPanel,
   PasswordRecoveryPanel,
@@ -92,6 +95,7 @@ export function App() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(() => isRecoveryUrl());
   const [isDigestSettingsOpen, setIsDigestSettingsOpen] = useState(false);
+  const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
 
   useEffect(() => {
     latestWorkspaceRef.current = { projects, materials };
@@ -746,6 +750,42 @@ export function App() {
     setProjectSection("materials");
   }
 
+  function saveAiMaterial(draft: AiMaterialDraft, taskId?: string) {
+    if (!selectedProject) {
+      return;
+    }
+
+    const sourceMarkdown = draft.sources.length
+      ? [
+          "",
+          "## Источники",
+          "",
+          ...draft.sources.map((source) => {
+            const title = source.title.replace(/\[|\]/g, "");
+            const url = source.url.replace(/\)/g, "%29");
+            return `- [${title}](${url})`;
+          }),
+        ].join("\n")
+      : "";
+    const now = new Date().toISOString();
+    const material: ProjectMaterial = {
+      id: crypto.randomUUID(),
+      title: draft.title.trim(),
+      kind: "text",
+      markdown: `${draft.markdown.trim()}${sourceMarkdown}`,
+      links: taskId ? [{ taskId }] : [{ projectId: selectedProject.id }],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    updateMaterials([...latestWorkspaceRef.current.materials, material]);
+    setSelectedTaskId(taskId ?? "");
+    setMaterialScope("context");
+    setSelectedMaterialId(material.id);
+    setProjectSection("materials");
+    setIsAiAssistantOpen(false);
+  }
+
   function updateMaterialMarkdown(materialId: string, markdown: string) {
     const now = new Date().toISOString();
     const nextMaterials = materials.map((material) =>
@@ -974,6 +1014,14 @@ export function App() {
                 </div>
               </div>
               <div className="action-row">
+                <button
+                  className="text-button primary"
+                  type="button"
+                  onClick={() => setIsAiAssistantOpen(true)}
+                >
+                  <Sparkles size={16} />
+                  ИИ-ассистент
+                </button>
                 <button className="text-button" type="button" onClick={() => openEditForm(selectedProject)}>
                   <Edit3 size={16} />
                   Редактировать
@@ -1110,6 +1158,15 @@ export function App() {
         <DigestSettingsDialog
           accountEmail={session.user.email}
           onClose={() => setIsDigestSettingsOpen(false)}
+        />
+      ) : null}
+
+      {isAiAssistantOpen && selectedProject ? (
+        <AiAssistantDialog
+          project={selectedProject}
+          initialTaskId={selectedTaskId || undefined}
+          onSave={saveAiMaterial}
+          onClose={() => setIsAiAssistantOpen(false)}
         />
       ) : null}
 
