@@ -190,6 +190,7 @@ Deno.serve(async (request) => {
     .from("ai_assistant_requests")
     .select("id", { count: "exact", head: true })
     .eq("user_id", user.id)
+    .in("status", ["started", "completed"])
     .gte("created_at", since);
 
   if (countError) {

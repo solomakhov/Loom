@@ -1121,6 +1121,70 @@ h3 {
   background: #f8faf7;
 }
 
+.material-color-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  border-left: 1px solid #d7ddd3;
+  border-right: 1px solid #d7ddd3;
+}
+
+.material-color-controls label {
+  position: relative;
+  display: grid;
+  width: 30px;
+  height: 28px;
+  cursor: pointer;
+  place-items: center;
+  border-radius: 4px;
+}
+
+.material-color-controls label:hover,
+.material-color-reset:hover {
+  background: #e9eee7;
+}
+
+.material-color-controls input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.material-color-letter,
+.material-color-highlight {
+  font-size: 0.9rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.material-color-letter {
+  color: #263a32;
+  border-bottom: 3px solid #263a32;
+}
+
+.material-color-highlight {
+  padding: 2px 4px;
+  background: #fff1a8;
+  border-radius: 2px;
+}
+
+.material-color-reset {
+  width: 26px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #65756c;
+  cursor: pointer;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
 .material-editor-surface {
   min-height: 320px;
   padding: 18px 20px;
@@ -1139,6 +1203,32 @@ h3 {
 .material-editor-surface ul,
 .material-editor-surface ol {
   padding-left: 1.35rem;
+}
+
+.material-editor-surface table {
+  width: 100%;
+  margin: 1rem 0;
+  border-collapse: collapse;
+  font-size: 0.94rem;
+}
+
+.material-editor-surface th,
+.material-editor-surface td {
+  min-width: 80px;
+  padding: 8px 10px;
+  border: 1px solid #cfd8cf;
+  text-align: left;
+  vertical-align: top;
+}
+
+.material-editor-surface th {
+  background: #f1f5ef;
+  color: #24352f;
+  font-weight: 800;
+}
+
+.material-editor-surface tr:nth-child(even) td {
+  background: #fafcf9;
 }
 
 .material-empty {

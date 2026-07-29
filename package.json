@@ -11,10 +11,13 @@
     "db:push:dry-run": "supabase db push --dry-run"
   },
   "dependencies": {
+    "@lexical/selection": "^0.35.0",
     "@mdxeditor/editor": "^4.0.4",
+    "@mdxeditor/gurx": "^1.2.4",
     "@supabase/supabase-js": "^2.110.7",
     "@vitejs/plugin-react": "^4.3.4",
     "lucide-react": "^0.468.0",
+    "lexical": "^0.35.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "typescript": "^5.7.2",
