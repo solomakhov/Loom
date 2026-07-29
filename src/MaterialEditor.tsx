@@ -45,6 +45,13 @@ function looksLikeMarkdown(value: string) {
   );
 }
 
+function containsExecutableHtml(value: string) {
+  return (
+    /<!doctype\b/i.test(value) ||
+    /<\s*\/?\s*(?:script|iframe|object|embed|link|meta|base|html|head|body)\b/i.test(value)
+  );
+}
+
 function TextColorControls() {
   const activeEditor = useCellValue(activeEditor$);
   const savedSelection = useRef<RangeSelection | null>(null);
@@ -118,6 +125,21 @@ function TextColorControls() {
 export function MaterialEditor({ markdown, onChange }: MaterialEditorProps) {
   const editorRef = useRef<MDXEditorMethods>(null);
 
+  if (containsExecutableHtml(markdown)) {
+    return (
+      <div className="material-source-mode">
+        <p>
+          Материал содержит исполняемый HTML и открыт как исходный текст в целях безопасности.
+        </p>
+        <textarea
+          aria-label="Исходный текст материала"
+          value={markdown}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </div>
+    );
+  }
+
   function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
     const pastedText = event.clipboardData.getData("text/plain");
     const pastedHtml = event.clipboardData.getData("text/html");
@@ -173,6 +195,10 @@ export function MaterialEditor({ markdown, onChange }: MaterialEditorProps) {
 }
 
 export function MaterialPreview({ markdown }: MaterialPreviewProps) {
+  if (containsExecutableHtml(markdown)) {
+    return <pre className="material-source-preview">{markdown}</pre>;
+  }
+
   return (
     <MDXEditor
       className="material-markdown-preview"

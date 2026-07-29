@@ -3,6 +3,7 @@ import { type ChangeEvent, useRef } from "react";
 import { MaterialEditor } from "../MaterialEditor";
 import { formatFileSize, type MaterialScope } from "../projectModel";
 import type { Project, ProjectMaterial, ProjectTask } from "../types";
+import { MaterialErrorBoundary } from "./ErrorBoundaries";
 import { PdfMaterialViewer } from "./PdfMaterialViewer";
 
 type MaterialsSectionProps = {
@@ -190,15 +191,19 @@ export function MaterialsSection({
                   ? `Связи: ${selectedMaterial.links.length}`
                   : "Материал без связей"}
               </button>
-              {selectedMaterial.kind === "pdf" ? (
-                <PdfMaterialViewer material={selectedMaterial} />
-              ) : (
-                <MaterialEditor
-                  key={selectedMaterial.id}
-                  markdown={selectedMaterial.markdown}
-                  onChange={(markdown) => onUpdateMarkdown(selectedMaterial.id, markdown)}
-                />
-              )}
+              <MaterialErrorBoundary
+                key={selectedMaterial.id}
+                onClose={() => onSelectMaterial("")}
+              >
+                {selectedMaterial.kind === "pdf" ? (
+                  <PdfMaterialViewer material={selectedMaterial} />
+                ) : (
+                  <MaterialEditor
+                    markdown={selectedMaterial.markdown}
+                    onChange={(markdown) => onUpdateMarkdown(selectedMaterial.id, markdown)}
+                  />
+                )}
+              </MaterialErrorBoundary>
             </>
           ) : (
             <div className="material-empty">
