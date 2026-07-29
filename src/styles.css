@@ -1298,13 +1298,53 @@ h3 {
   margin-left: auto;
 }
 
-.pdf-frame {
-  width: 100%;
-  height: min(68vh, 760px);
-  min-height: 460px;
+.pdf-viewer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 5px 8px;
   border: 1px solid #d7ddd3;
   border-radius: 8px;
-  background: #f2f4f1;
+  background: #f8faf7;
+  color: #53675e;
+  font-size: 0.88rem;
+}
+
+.pdf-viewer-spacer {
+  flex: 1;
+}
+
+.pdf-canvas-stage {
+  position: relative;
+  min-height: 460px;
+  max-height: min(72vh, 820px);
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid #d7ddd3;
+  border-radius: 8px;
+  background: #e8ece7;
+}
+
+.pdf-page-canvas {
+  display: block;
+  max-width: none;
+  margin: 0 auto;
+  background: #ffffff;
+  box-shadow: 0 3px 14px rgb(31 41 51 / 16%);
+}
+
+.pdf-rendering-status {
+  position: sticky;
+  bottom: 12px;
+  left: 50%;
+  display: table;
+  margin: 12px auto 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgb(36 53 47 / 88%);
+  color: #ffffff;
+  font-size: 0.82rem;
 }
 
 .material-file-error {
