@@ -83,6 +83,9 @@ jobs:
         run: npx supabase db push
 
       - name: Deploy Edge Functions
-        run: |
-          npx supabase functions deploy daily-digest --project-ref "$SUPABASE_PROJECT_ID"
-          npx supabase functions deploy ai-material-draft --project-ref "$SUPABASE_PROJECT_ID"
+        run: >-
+          npx supabase functions deploy
+          daily-digest
+          ai-material-draft
+          --project-ref "$SUPABASE_PROJECT_ID"
+          --use-api
