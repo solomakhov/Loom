@@ -2,13 +2,17 @@ import {
   BlockTypeSelect,
   BoldItalicUnderlineToggles,
   CreateLink,
+  InsertCodeBlock,
   InsertTable,
   InsertThematicBreak,
   ListsToggle,
   MDXEditor,
+  type CodeBlockEditorDescriptor,
+  type CodeBlockEditorProps,
   type MDXEditorMethods,
   UndoRedo,
   activeEditor$,
+  codeBlockPlugin,
   headingsPlugin,
   linkDialogPlugin,
   linkPlugin,
@@ -18,6 +22,7 @@ import {
   tablePlugin,
   thematicBreakPlugin,
   toolbarPlugin,
+  useCodeBlockEditorContext,
 } from "@mdxeditor/editor";
 import { useCellValue } from "@mdxeditor/gurx";
 import { $patchStyleText } from "@lexical/selection";
@@ -37,6 +42,48 @@ type MaterialEditorProps = {
 
 type MaterialPreviewProps = {
   markdown: string;
+};
+
+type MarkdownProcessingError = {
+  error: string;
+  source: string;
+};
+
+function PlainCodeBlockEditor({
+  code,
+  language,
+  focusEmitter,
+}: CodeBlockEditorProps) {
+  const { setCode, setLanguage } = useCodeBlockEditorContext();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    focusEmitter.subscribe(() => textareaRef.current?.focus());
+  }, [focusEmitter]);
+
+  return (
+    <div className="material-code-block">
+      <input
+        aria-label="Язык блока кода"
+        value={language}
+        placeholder="Язык"
+        onChange={(event) => setLanguage(event.target.value)}
+      />
+      <textarea
+        ref={textareaRef}
+        aria-label="Содержимое блока кода"
+        value={code}
+        spellCheck={false}
+        onChange={(event) => setCode(event.target.value)}
+      />
+    </div>
+  );
+}
+
+const plainCodeBlockDescriptor: CodeBlockEditorDescriptor = {
+  priority: 0,
+  match: () => true,
+  Editor: PlainCodeBlockEditor,
 };
 
 function looksLikeMarkdown(value: string) {
@@ -126,6 +173,7 @@ function TextColorControls() {
 
 export function MaterialEditor({ markdown, onChange, onSave }: MaterialEditorProps) {
   const editorRef = useRef<MDXEditorMethods>(null);
+  const [markdownError, setMarkdownError] = useState<MarkdownProcessingError | null>(null);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -135,16 +183,43 @@ export function MaterialEditor({ markdown, onChange, onSave }: MaterialEditorPro
     }
   }, [markdown]);
 
-  if (containsExecutableHtml(markdown)) {
+  useEffect(() => {
+    if (markdownError && markdown !== markdownError.source) {
+      setMarkdownError(null);
+    }
+  }, [markdown, markdownError]);
+
+  const sourceMarkdown = markdownError?.source ?? markdown;
+
+  if (containsExecutableHtml(markdown) || markdownError) {
     return (
       <div className="material-source-mode">
         <p>
-          Материал содержит исполняемый HTML и открыт как исходный текст в целях безопасности.
+          {markdownError
+            ? "Фрагмент содержит разметку, которую визуальный редактор не смог распознать. Текст сохранён полностью и открыт в исходном виде."
+            : "Материал содержит исполняемый HTML и открыт как исходный текст в целях безопасности."}
         </p>
+        {markdownError ? (
+          <button
+            className="text-button"
+            type="button"
+            onClick={() => setMarkdownError(null)}
+          >
+            Попробовать визуальный режим
+          </button>
+        ) : null}
         <textarea
           aria-label="Исходный текст материала"
-          value={markdown}
-          onChange={(event) => onChange(event.target.value)}
+          value={sourceMarkdown}
+          onChange={(event) => {
+            const nextMarkdown = event.target.value;
+
+            if (markdownError) {
+              setMarkdownError({ ...markdownError, source: nextMarkdown });
+            }
+
+            onChange(nextMarkdown);
+          }}
           onBlur={(event) => onSave(event.target.value)}
         />
       </div>
@@ -177,6 +252,11 @@ export function MaterialEditor({ markdown, onChange, onSave }: MaterialEditorPro
         contentEditableClassName="material-editor-surface"
         markdown={markdown}
         onChange={onChange}
+        onError={(payload) => {
+          setMarkdownError(payload);
+          onChange(payload.source);
+          onSave(payload.source);
+        }}
         onBlur={() => onSave(editorRef.current?.getMarkdown() ?? markdown)}
         plugins={[
           headingsPlugin(),
@@ -186,6 +266,10 @@ export function MaterialEditor({ markdown, onChange, onSave }: MaterialEditorPro
           thematicBreakPlugin(),
           linkPlugin(),
           linkDialogPlugin(),
+          codeBlockPlugin({
+            defaultCodeBlockLanguage: "",
+            codeBlockEditorDescriptors: [plainCodeBlockDescriptor],
+          }),
           markdownShortcutPlugin(),
           toolbarPlugin({
             toolbarContents: () => (
@@ -196,6 +280,7 @@ export function MaterialEditor({ markdown, onChange, onSave }: MaterialEditorPro
                 <ListsToggle />
                 <TextColorControls />
                 <CreateLink />
+                <InsertCodeBlock />
                 <InsertTable />
                 <InsertThematicBreak />
               </>
@@ -225,6 +310,10 @@ export function MaterialPreview({ markdown }: MaterialPreviewProps) {
         tablePlugin(),
         thematicBreakPlugin(),
         linkPlugin(),
+        codeBlockPlugin({
+          defaultCodeBlockLanguage: "",
+          codeBlockEditorDescriptors: [plainCodeBlockDescriptor],
+        }),
       ]}
     />
   );

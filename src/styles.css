@@ -1320,6 +1320,30 @@ h3 {
   font: 0.9rem/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
+.material-code-block {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid #d7ddd3;
+  border-radius: 10px;
+  background: #f4f6f5;
+}
+
+.material-code-block input {
+  width: min(180px, 100%);
+  font-size: 0.78rem;
+}
+
+.material-code-block textarea {
+  min-height: 120px;
+  resize: vertical;
+  border: 0;
+  background: transparent;
+  font-family: SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  line-height: 1.5;
+}
+
 .material-source-preview {
   margin: 0;
   overflow: auto;
