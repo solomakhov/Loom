@@ -1,6 +1,7 @@
 name: Database migrations
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - ".github/workflows/database-migrations.yml"
@@ -28,23 +29,31 @@ jobs:
   validate:
     name: Validate migrations
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install Supabase CLI
-        uses: supabase/setup-cli@v2
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          version: 2.84.2
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        timeout-minutes: 10
 
       - name: Apply migrations to a fresh local database
-        run: supabase db start
+        run: npx supabase db start
+        timeout-minutes: 20
 
   deploy:
     name: Apply migrations to production
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: validate
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: production
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -54,21 +63,26 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install Supabase CLI
-        uses: supabase/setup-cli@v2
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          version: 2.84.2
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        timeout-minutes: 10
 
       - name: Link production project
-        run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
+        run: npx supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
       - name: Show pending migrations
-        run: supabase db push --dry-run
+        run: npx supabase db push --dry-run
 
       - name: Apply pending migrations
-        run: supabase db push
+        run: npx supabase db push
 
       - name: Deploy Edge Functions
         run: |
-          supabase functions deploy daily-digest --project-ref "$SUPABASE_PROJECT_ID"
-          supabase functions deploy ai-material-draft --project-ref "$SUPABASE_PROJECT_ID"
+          npx supabase functions deploy daily-digest --project-ref "$SUPABASE_PROJECT_ID"
+          npx supabase functions deploy ai-material-draft --project-ref "$SUPABASE_PROJECT_ID"
