@@ -32,8 +32,10 @@ import { TaskSection } from "./components/TaskSection";
 import {
   deleteMaterialFile,
   loadWorkspace,
-  saveWorkspace,
+  saveWorkspaceChanges,
+  subscribeToWorkspaceChanges,
   uploadPdfFile,
+  WorkspaceConflictError,
 } from "./storage";
 import { isSupabaseConfigured, supabase } from "./supabase";
 import {
@@ -191,12 +193,180 @@ function getLocalDateValue(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function mergeWorkspaceRevisions(
+  currentWorkspace: WorkspaceData,
+  savedWorkspace: WorkspaceData,
+): WorkspaceData {
+  const savedProjects = new Map(
+    savedWorkspace.projects.map((project) => [project.id, project]),
+  );
+  const savedTasks = new Map(
+    savedWorkspace.projects.flatMap((project) =>
+      project.tasks.map((task) => [task.id, task] as const),
+    ),
+  );
+  const savedMaterials = new Map(
+    savedWorkspace.materials.map((material) => [material.id, material]),
+  );
+
+  return {
+    projects: currentWorkspace.projects.map((project) => ({
+      ...project,
+      revision: savedProjects.get(project.id)?.revision ?? project.revision,
+      tasks: project.tasks.map((task) => ({
+        ...task,
+        revision: savedTasks.get(task.id)?.revision ?? task.revision,
+      })),
+    })),
+    materials: currentWorkspace.materials.map((material) => ({
+      ...material,
+      revision: savedMaterials.get(material.id)?.revision ?? material.revision,
+    })),
+  };
+}
+
+function entitySignature<T extends { revision: number }>(entity: T) {
+  const { revision: _revision, ...value } = entity;
+  return JSON.stringify(value);
+}
+
+function projectSignature(project: Project) {
+  const {
+    revision: _revision,
+    tasks: _tasks,
+    progress: _progress,
+    updatedAt: _updatedAt,
+    ...value
+  } = project;
+  return JSON.stringify(value);
+}
+
+function mergeEntityMaps<T extends { id: string; revision: number }>(
+  baseItems: T[],
+  localItems: T[],
+  remoteItems: T[],
+  signature: (item: T) => string = entitySignature,
+) {
+  const base = new Map(baseItems.map((item) => [item.id, item]));
+  const local = new Map(localItems.map((item) => [item.id, item]));
+  const remote = new Map(remoteItems.map((item) => [item.id, item]));
+  const ids = Array.from(new Set([...local.keys(), ...remote.keys(), ...base.keys()]));
+  const items: T[] = [];
+  let hasConflict = false;
+
+  for (const id of ids) {
+    const baseItem = base.get(id);
+    const localItem = local.get(id);
+    const remoteItem = remote.get(id);
+    const localChanged = baseItem
+      ? !localItem || signature(localItem) !== signature(baseItem)
+      : Boolean(localItem);
+    const remoteChanged = baseItem
+      ? !remoteItem || signature(remoteItem) !== signature(baseItem)
+      : Boolean(remoteItem);
+
+    if (localChanged && remoteChanged) {
+      if (!localItem && !remoteItem) {
+        continue;
+      }
+
+      if (
+        !localItem ||
+        !remoteItem ||
+        signature(localItem) !== signature(remoteItem)
+      ) {
+        hasConflict = true;
+
+        if (localItem) {
+          items.push(localItem);
+        }
+        continue;
+      }
+    }
+
+    const selectedItem = remoteChanged ? remoteItem : localItem;
+
+    if (selectedItem) {
+      items.push(selectedItem);
+    }
+  }
+
+  return { items, hasConflict };
+}
+
+function flattenWorkspaceTasks(workspace: WorkspaceData) {
+  return workspace.projects.flatMap((project) => project.tasks);
+}
+
+function mergeRealtimeWorkspaces(
+  base: WorkspaceData,
+  local: WorkspaceData,
+  remote: WorkspaceData,
+) {
+  const mergedProjects = mergeEntityMaps(
+    base.projects,
+    local.projects,
+    remote.projects,
+    projectSignature,
+  );
+  const mergedTasks = mergeEntityMaps(
+    flattenWorkspaceTasks(base),
+    flattenWorkspaceTasks(local),
+    flattenWorkspaceTasks(remote),
+  );
+  const mergedMaterials = mergeEntityMaps(
+    base.materials,
+    local.materials,
+    remote.materials,
+  );
+  const tasksByProject = new Map<string, ProjectTask[]>();
+  const taskProjectIds = new Map<string, string>();
+
+  for (const workspace of [base, local, remote]) {
+    for (const project of workspace.projects) {
+      for (const task of project.tasks) {
+        taskProjectIds.set(task.id, project.id);
+      }
+    }
+  }
+
+  for (const task of mergedTasks.items) {
+    const projectId = taskProjectIds.get(task.id);
+
+    if (!projectId) {
+      continue;
+    }
+
+    const projectTasks = tasksByProject.get(projectId) ?? [];
+    projectTasks.push(task);
+    tasksByProject.set(projectId, projectTasks);
+  }
+
+  return {
+    workspace: {
+      projects: mergedProjects.items.map((project) => ({
+        ...project,
+        tasks: tasksByProject.get(project.id) ?? [],
+      })),
+      materials: mergedMaterials.items,
+    },
+    hasConflict:
+      mergedProjects.hasConflict ||
+      mergedTasks.hasConflict ||
+      mergedMaterials.hasConflict,
+  };
+}
+
 export function App() {
   const saveTimerRef = useRef<number | null>(null);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const workspaceVersionRef = useRef(0);
   const pendingMaterialNavigationRef = useRef<{ id: string; scope: MaterialScope } | null>(
     null,
   );
   const latestWorkspaceRef = useRef<WorkspaceData>({ projects: [], materials: [] });
+  const persistedWorkspaceRef = useRef<WorkspaceData>({ projects: [], materials: [] });
+  const realtimeTimerRef = useRef<number | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [materials, setMaterials] = useState<ProjectMaterial[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -224,6 +394,7 @@ export function App() {
   const [isDigestSettingsOpen, setIsDigestSettingsOpen] = useState(false);
   const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
   const [isProjectDrawerOpen, setIsProjectDrawerOpen] = useState(false);
+  const [remoteConflict, setRemoteConflict] = useState<WorkspaceData | null>(null);
   const [isMobileLayout, setIsMobileLayout] = useState(
     () => window.matchMedia("(max-width: 860px)").matches,
   );
@@ -375,6 +546,7 @@ export function App() {
   useEffect(() => {
     if (isSupabaseConfigured && !session) {
       latestWorkspaceRef.current = { projects: [], materials: [] };
+      persistedWorkspaceRef.current = { projects: [], materials: [] };
       setProjects([]);
       setMaterials([]);
       setSelectedId("");
@@ -395,8 +567,10 @@ export function App() {
         }
 
         latestWorkspaceRef.current = loadedWorkspace;
+        persistedWorkspaceRef.current = loadedWorkspace;
         setProjects(loadedWorkspace.projects);
         setMaterials(loadedWorkspace.materials);
+        setRemoteConflict(null);
         const savedNavigation = loadSavedNavigation(session?.user.id);
         const urlNavigation = loadUrlNavigation();
         const restoredNavigation = urlNavigation.hasNavigation
@@ -448,6 +622,68 @@ export function App() {
 
     return () => {
       isMounted = false;
+    };
+  }, [session]);
+
+  useEffect(() => {
+    if (!session || !supabase) {
+      return;
+    }
+
+    const unsubscribe = subscribeToWorkspaceChanges(() => {
+      if (realtimeTimerRef.current) {
+        window.clearTimeout(realtimeTimerRef.current);
+      }
+
+      realtimeTimerRef.current = window.setTimeout(async () => {
+        realtimeTimerRef.current = null;
+
+        try {
+          await saveQueueRef.current.catch(() => undefined);
+          const remoteWorkspace = await loadWorkspace({ importLocalIfEmpty: false });
+          const merged = mergeRealtimeWorkspaces(
+            persistedWorkspaceRef.current,
+            latestWorkspaceRef.current,
+            remoteWorkspace,
+          );
+
+          persistedWorkspaceRef.current = remoteWorkspace;
+          latestWorkspaceRef.current = merged.workspace;
+          setProjects(merged.workspace.projects);
+          setMaterials(merged.workspace.materials);
+
+          if (merged.hasConflict) {
+            if (saveTimerRef.current) {
+              window.clearTimeout(saveTimerRef.current);
+              saveTimerRef.current = null;
+            }
+
+            setRemoteConflict(remoteWorkspace);
+            setStorageError(
+              "Этот объект изменён в другом окне. Локальная версия оставлена на экране и не перезаписана.",
+            );
+            setSaveStatus("error");
+          } else {
+            setRemoteConflict(null);
+
+            if (!saveTimerRef.current) {
+              setStorageError("");
+              setSaveStatus("saved");
+            }
+          }
+        } catch (error) {
+          console.error(error);
+        }
+      }, 250);
+    });
+
+    return () => {
+      unsubscribe();
+
+      if (realtimeTimerRef.current) {
+        window.clearTimeout(realtimeTimerRef.current);
+        realtimeTimerRef.current = null;
+      }
     };
   }, [session]);
 
@@ -803,15 +1039,60 @@ export function App() {
   async function persistWorkspace(
     nextWorkspace: WorkspaceData,
     previousWorkspace?: WorkspaceData,
+    version = workspaceVersionRef.current,
   ) {
     setSaveStatus("saving");
+    const saveOperation = saveQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const savedWorkspace = await saveWorkspaceChanges(
+          persistedWorkspaceRef.current,
+          nextWorkspace,
+        );
+        persistedWorkspaceRef.current = savedWorkspace;
+        const currentWorkspace = latestWorkspaceRef.current;
+        const mergedWorkspace = mergeWorkspaceRevisions(currentWorkspace, savedWorkspace);
+        latestWorkspaceRef.current = mergedWorkspace;
+        setProjects(mergedWorkspace.projects);
+        setMaterials(mergedWorkspace.materials);
+      });
+    saveQueueRef.current = saveOperation;
 
     try {
-      await saveWorkspace(nextWorkspace);
-      setStorageError("");
-      setSaveStatus("saved");
+      await saveOperation;
+
+      if (version === workspaceVersionRef.current) {
+        setStorageError("");
+        setSaveStatus("saved");
+        setRemoteConflict(null);
+      }
     } catch (error) {
       console.error(error);
+
+      if (version !== workspaceVersionRef.current) {
+        return;
+      }
+
+      if (error instanceof WorkspaceConflictError) {
+        if (saveTimerRef.current) {
+          window.clearTimeout(saveTimerRef.current);
+          saveTimerRef.current = null;
+        }
+
+        try {
+          const remoteWorkspace = await loadWorkspace({ importLocalIfEmpty: false });
+          setRemoteConflict(remoteWorkspace);
+          setStorageError(
+            "Данные изменились в другом окне. Ваша версия сохранена на экране и не была отправлена поверх чужой.",
+          );
+        } catch (loadError) {
+          console.error(loadError);
+          setStorageError("Обнаружен конфликт изменений. Не удалось загрузить новую версию.");
+        }
+        setSaveStatus("error");
+        return;
+      }
+
       const errorMessage = getErrorMessage(error);
       setStorageError(
         errorMessage ? `Не удалось сохранить данные: ${errorMessage}` : "Не удалось сохранить данные.",
@@ -832,6 +1113,17 @@ export function App() {
   ) {
     const previousWorkspace = latestWorkspaceRef.current;
 
+    if (remoteConflict) {
+      latestWorkspaceRef.current = nextWorkspace;
+      setProjects(nextWorkspace.projects);
+      setMaterials(nextWorkspace.materials);
+      setSaveStatus("error");
+      return;
+    }
+
+    const version = workspaceVersionRef.current + 1;
+    workspaceVersionRef.current = version;
+
     latestWorkspaceRef.current = nextWorkspace;
     setProjects(nextWorkspace.projects);
     setMaterials(nextWorkspace.materials);
@@ -845,12 +1137,33 @@ export function App() {
 
     if (options.debounce) {
       saveTimerRef.current = window.setTimeout(() => {
-        persistWorkspace(latestWorkspaceRef.current);
+        saveTimerRef.current = null;
+        persistWorkspace(latestWorkspaceRef.current, undefined, version);
       }, 800);
       return;
     }
 
-    persistWorkspace(nextWorkspace, previousWorkspace);
+    persistWorkspace(nextWorkspace, previousWorkspace, version);
+  }
+
+  function acceptRemoteChanges() {
+    if (!remoteConflict) {
+      return;
+    }
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    workspaceVersionRef.current += 1;
+    persistedWorkspaceRef.current = remoteConflict;
+    latestWorkspaceRef.current = remoteConflict;
+    setProjects(remoteConflict.projects);
+    setMaterials(remoteConflict.materials);
+    setRemoteConflict(null);
+    setStorageError("");
+    setSaveStatus("saved");
   }
 
   function commitProjects(nextProjects: Project[], options: { debounce?: boolean } = {}) {
@@ -990,6 +1303,7 @@ export function App() {
     const now = new Date().toISOString();
     const task: ProjectTask = {
       id: crypto.randomUUID(),
+      revision: 0,
       title: normalizedTitle,
       done: false,
       parentTaskId,
@@ -1107,6 +1421,7 @@ export function App() {
     const now = new Date().toISOString();
     const material: ProjectMaterial = {
       id: crypto.randomUUID(),
+      revision: 0,
       title: "",
       kind: "text",
       markdown: "",
@@ -1141,6 +1456,7 @@ export function App() {
     const now = new Date().toISOString();
     const material: ProjectMaterial = {
       id: crypto.randomUUID(),
+      revision: 0,
       title: draft.title.trim(),
       kind: "text",
       markdown: `${draft.markdown.trim()}${sourceMarkdown}`,
@@ -1159,16 +1475,42 @@ export function App() {
 
   function updateMaterialMarkdown(materialId: string, markdown: string) {
     const now = new Date().toISOString();
-    const nextMaterials = materials.map((material) =>
+    const nextMaterials = latestWorkspaceRef.current.materials.map((material) =>
       material.id === materialId ? { ...material, markdown, updatedAt: now } : material,
     );
 
     updateMaterials(nextMaterials, { debounce: true });
   }
 
+  function saveMaterialMarkdown(materialId: string, markdown: string) {
+    const material = latestWorkspaceRef.current.materials.find(
+      (item) => item.id === materialId,
+    );
+
+    if (!material) {
+      return;
+    }
+
+    if (material.markdown === markdown && saveTimerRef.current === null) {
+      return;
+    }
+
+    const nextMaterials = latestWorkspaceRef.current.materials.map((item) =>
+      item.id === materialId
+        ? {
+            ...item,
+            markdown,
+            updatedAt: item.markdown === markdown ? item.updatedAt : new Date().toISOString(),
+          }
+        : item,
+    );
+
+    updateMaterials(nextMaterials);
+  }
+
   function renameMaterial(materialId: string, title: string) {
     const now = new Date().toISOString();
-    const nextMaterials = materials.map((material) =>
+    const nextMaterials = latestWorkspaceRef.current.materials.map((material) =>
       material.id === materialId ? { ...material, title, updatedAt: now } : material,
     );
 
@@ -1284,6 +1626,7 @@ export function App() {
             : [];
       const material: ProjectMaterial = {
         id: materialId,
+        revision: 0,
         title: file.name.replace(/\.pdf$/i, ""),
         kind: "pdf",
         markdown: "",
@@ -1315,12 +1658,14 @@ export function App() {
     await supabase.auth.signOut();
     clearPasswordRecoveryRequested();
     latestWorkspaceRef.current = { projects: [], materials: [] };
+    persistedWorkspaceRef.current = { projects: [], materials: [] };
     setProjects([]);
     setMaterials([]);
     setSelectedId("");
     setSelectedMaterialId("");
     setSelectedTaskId("");
     setSaveStatus("idle");
+    setRemoteConflict(null);
   }
 
   if (isAuthLoading) {
@@ -1411,7 +1756,16 @@ export function App() {
           {getSaveStatusLabel(saveStatus)}
         </div>
 
-        {storageError ? <div className="storage-banner">{storageError}</div> : null}
+        {storageError ? (
+          <div className={remoteConflict ? "storage-banner conflict" : "storage-banner"}>
+            <span>{storageError}</span>
+            {remoteConflict ? (
+              <button className="text-button" type="button" onClick={acceptRemoteChanges}>
+                Загрузить версию из другого окна
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
         {isLoadingProjects ? (
           <div className="empty-state">
@@ -1537,6 +1891,7 @@ export function App() {
                 onOpenLinks={openMaterialLinks}
                 onDeleteMaterial={deleteMaterial}
                 onUpdateMarkdown={updateMaterialMarkdown}
+                onSaveMarkdown={saveMaterialMarkdown}
               />
             ) : null}
 

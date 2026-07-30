@@ -21,6 +21,7 @@ type MaterialsSectionProps = {
   onOpenLinks: (material: ProjectMaterial) => void;
   onDeleteMaterial: (materialId: string) => void;
   onUpdateMarkdown: (materialId: string, markdown: string) => void;
+  onSaveMarkdown: (materialId: string, markdown: string) => void;
 };
 
 export function MaterialsSection({
@@ -38,6 +39,7 @@ export function MaterialsSection({
   onOpenLinks,
   onDeleteMaterial,
   onUpdateMarkdown,
+  onSaveMarkdown,
 }: MaterialsSectionProps) {
   const pdfInputRef = useRef<HTMLInputElement | null>(null);
   const addContextMaterial = () =>
@@ -201,6 +203,7 @@ export function MaterialsSection({
                   <MaterialEditor
                     markdown={selectedMaterial.markdown}
                     onChange={(markdown) => onUpdateMarkdown(selectedMaterial.id, markdown)}
+                    onSave={(markdown) => onSaveMarkdown(selectedMaterial.id, markdown)}
                   />
                 )}
               </MaterialErrorBoundary>

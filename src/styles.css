@@ -486,6 +486,10 @@ h3 {
 }
 
 .storage-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   background: #fff6d8;
   border: 1px solid #e4c469;
   border-radius: 8px;
@@ -493,6 +497,16 @@ h3 {
   font-size: 0.92rem;
   margin-bottom: 18px;
   padding: 12px 14px;
+}
+
+.storage-banner.conflict {
+  border-color: #d88b92;
+  background: #fff0f1;
+  color: #842a34;
+}
+
+.storage-banner .text-button {
+  flex: 0 0 auto;
 }
 
 .save-status {
@@ -2050,6 +2064,15 @@ h3 {
 }
 
 @media (max-width: 560px) {
+  .storage-banner {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .storage-banner .text-button {
+    width: 100%;
+  }
+
   .sidebar {
     padding: 20px;
   }

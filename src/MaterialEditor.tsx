@@ -27,11 +27,12 @@ import {
   $setSelection,
   type RangeSelection,
 } from "lexical";
-import { type ClipboardEvent, useRef, useState } from "react";
+import { type ClipboardEvent, useEffect, useRef, useState } from "react";
 
 type MaterialEditorProps = {
   markdown: string;
   onChange: (markdown: string) => void;
+  onSave: (markdown: string) => void;
 };
 
 type MaterialPreviewProps = {
@@ -122,8 +123,16 @@ function TextColorControls() {
   );
 }
 
-export function MaterialEditor({ markdown, onChange }: MaterialEditorProps) {
+export function MaterialEditor({ markdown, onChange, onSave }: MaterialEditorProps) {
   const editorRef = useRef<MDXEditorMethods>(null);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+
+    if (editor && editor.getMarkdown() !== markdown) {
+      editor.setMarkdown(markdown);
+    }
+  }, [markdown]);
 
   if (containsExecutableHtml(markdown)) {
     return (
@@ -135,6 +144,7 @@ export function MaterialEditor({ markdown, onChange }: MaterialEditorProps) {
           aria-label="Исходный текст материала"
           value={markdown}
           onChange={(event) => onChange(event.target.value)}
+          onBlur={(event) => onSave(event.target.value)}
         />
       </div>
     );
@@ -143,10 +153,11 @@ export function MaterialEditor({ markdown, onChange }: MaterialEditorProps) {
   function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
     const pastedText = event.clipboardData.getData("text/plain");
     const pastedHtml = event.clipboardData.getData("text/html");
+    const editor = editorRef.current;
 
     if (
       !pastedText ||
-      !editorRef.current ||
+      !editor ||
       (pastedHtml && !looksLikeMarkdown(pastedText))
     ) {
       return;
@@ -154,7 +165,12 @@ export function MaterialEditor({ markdown, onChange }: MaterialEditorProps) {
 
     event.preventDefault();
     event.stopPropagation();
-    editorRef.current.insertMarkdown(pastedText);
+    const normalizedText = pastedText.replace(/\r\n?/g, "\n");
+
+    editor.focus(
+      () => editor.insertMarkdown(normalizedText),
+      { defaultSelection: "rootEnd", preventScroll: true },
+    );
   }
 
   return (
@@ -165,6 +181,7 @@ export function MaterialEditor({ markdown, onChange }: MaterialEditorProps) {
         contentEditableClassName="material-editor-surface"
         markdown={markdown}
         onChange={onChange}
+        onBlur={() => onSave(editorRef.current?.getMarkdown() ?? markdown)}
         plugins={[
           headingsPlugin(),
           listsPlugin(),

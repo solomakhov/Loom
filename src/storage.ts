@@ -17,6 +17,7 @@ export const MATERIALS_BUCKET = "materials";
 
 type ProjectRow = {
   id: string;
+  revision: number;
   title: string;
   description: string;
   status: ProjectStatus;
@@ -35,6 +36,7 @@ type ProjectTagRow = {
 
 type ProjectTaskRow = {
   id: string;
+  revision: number;
   project_id: string;
   parent_task_id: string | null;
   title: string;
@@ -49,6 +51,7 @@ type ProjectTaskRow = {
 
 type MaterialRow = {
   id: string;
+  revision: number;
   title: string;
   kind: "text" | "pdf";
   markdown: string;
@@ -69,12 +72,20 @@ type MaterialLinkRow = {
 let loadedMaterialIds = new Set<string>();
 let loadedProjectIds = new Set<string>();
 
-type LegacyMaterial = Omit<ProjectMaterial, "kind" | "links"> & {
+type LegacyMaterial = Omit<ProjectMaterial, "kind" | "links" | "revision"> & {
+  revision?: number;
   taskId?: string;
 };
 
-type LegacyProject = Project & {
+type LegacyProject = Omit<Project, "revision" | "tasks"> & {
+  revision?: number;
+  tasks: Array<Omit<ProjectTask, "revision"> & { revision?: number }>;
   materials?: LegacyMaterial[];
+};
+
+type NormalizableProject = Omit<Project, "revision" | "tasks"> & {
+  revision?: number;
+  tasks: Array<Omit<ProjectTask, "revision"> & { revision?: number }>;
 };
 
 function emptyToNull(value: string) {
@@ -194,12 +205,14 @@ function calculateProgress(project: Project) {
   return Math.round((completedCount / project.tasks.length) * 100);
 }
 
-function normalizeProject(project: Project): Project {
+function normalizeProject(project: NormalizableProject): Project {
   const normalizedProject = {
     ...project,
+    revision: project.revision ?? 0,
     tasks: Array.isArray(project.tasks)
       ? project.tasks.map((task, index) => ({
           ...task,
+          revision: task.revision ?? 0,
           description: task.description ?? "",
           position: task.position ?? index,
           startDate: task.startDate ?? "",
@@ -235,6 +248,7 @@ function buildProjectFromRows(
     })
     .map((task) => ({
       id: task.id,
+      revision: task.revision,
       title: task.title,
       description: task.description ?? "",
       done: task.done,
@@ -248,6 +262,7 @@ function buildProjectFromRows(
 
   return normalizeProject({
     id: projectRow.id,
+    revision: projectRow.revision,
     title: projectRow.title,
     description: projectRow.description,
     status: projectRow.status,
@@ -271,6 +286,7 @@ function buildMaterialsFromRows(
 ): ProjectMaterial[] {
   return materialRows.map((material) => ({
     id: material.id,
+    revision: material.revision,
     title: material.title,
     kind: material.kind ?? "text",
     markdown: material.markdown ?? "",
@@ -333,6 +349,7 @@ function migrateLegacyProjects(legacyProjects: LegacyProject[]): WorkspaceData {
       const { taskId: _taskId, ...material } = legacyMaterial;
       materials.set(legacyMaterial.id, {
         ...material,
+        revision: legacyMaterial.revision ?? 0,
         kind: "text",
         links: [link],
       });
@@ -353,6 +370,7 @@ function normalizeWorkspace(workspace: WorkspaceData): WorkspaceData {
     materials: Array.isArray(workspace.materials)
       ? workspace.materials.map((material) => ({
           ...material,
+          revision: material.revision ?? 0,
           kind: material.kind ?? "text",
           markdown: material.markdown ?? "",
           links: Array.isArray(material.links) ? material.links : [],
@@ -405,14 +423,16 @@ function saveWorkspaceToLocalStorage(workspace: WorkspaceData) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace));
 }
 
-export async function loadWorkspace(): Promise<WorkspaceData> {
+export async function loadWorkspace(
+  options: { importLocalIfEmpty?: boolean } = {},
+): Promise<WorkspaceData> {
   if (!supabase) {
     return loadWorkspaceFromLocalStorage();
   }
 
   const { data: projectRows, error: projectsError } = await supabase
     .from(SUPABASE_PROJECTS_TABLE)
-    .select("id,title,description,status,priority,start_date,due_date,icon,created_at,updated_at")
+    .select("id,revision,title,description,status,priority,start_date,due_date,icon,created_at,updated_at")
     .order("updated_at", { ascending: false });
 
   if (projectsError) {
@@ -421,7 +441,7 @@ export async function loadWorkspace(): Promise<WorkspaceData> {
 
   const projects = (projectRows ?? []) as ProjectRow[];
 
-  if (!projects.length) {
+  if (!projects.length && options.importLocalIfEmpty !== false) {
     const localWorkspace = loadExistingWorkspaceFromLocalStorage();
 
     if (localWorkspace?.projects.length || localWorkspace?.materials.length) {
@@ -439,10 +459,10 @@ export async function loadWorkspace(): Promise<WorkspaceData> {
     supabase.from("project_tags").select("project_id,tag"),
     supabase
       .from("project_tasks")
-      .select("id,project_id,parent_task_id,title,description,done,position,start_date,due_date,created_at,updated_at"),
+      .select("id,revision,project_id,parent_task_id,title,description,done,position,start_date,due_date,created_at,updated_at"),
     supabase
       .from("materials")
-      .select("id,title,kind,markdown,file_path,file_name,mime_type,file_size,created_at,updated_at"),
+      .select("id,revision,title,kind,markdown,file_path,file_name,mime_type,file_size,created_at,updated_at"),
     supabase.from("material_links").select("material_id,project_id,task_id"),
   ]);
 
@@ -493,6 +513,7 @@ export async function saveWorkspace(workspace: WorkspaceData) {
   const normalizedMaterials = normalizeWorkspace(workspace).materials;
   const projectRows = normalizedProjects.map((project) => ({
     id: project.id,
+    revision: Math.max(1, project.revision),
     user_id: userId,
     title: project.title.trim() || "Untitled project",
     description: project.description,
@@ -576,6 +597,7 @@ async function saveProjectChildren(
     .flatMap((project) =>
       project.tasks.map((task, index) => ({
         id: task.id,
+        revision: Math.max(1, task.revision),
         user_id: userId,
         project_id: project.id,
         parent_task_id: task.parentTaskId ?? null,
@@ -624,6 +646,7 @@ async function saveMaterials(materials: ProjectMaterial[], userId: string) {
   const materialRows = uniqueById(
     materials.map((material) => ({
       id: material.id,
+      revision: Math.max(1, material.revision),
       user_id: userId,
       title: material.title,
       kind: material.kind,
@@ -743,6 +766,475 @@ async function deleteLoadedMissingMaterials(currentMaterialIds: Set<string>) {
   if (error) {
     throw error;
   }
+}
+
+export type WorkspaceEntityKind = "project" | "task" | "material";
+
+export class WorkspaceConflictError extends Error {
+  constructor(
+    public readonly entityKind: WorkspaceEntityKind,
+    public readonly entityId: string,
+  ) {
+    super("Данные изменились в другом окне.");
+    this.name = "WorkspaceConflictError";
+  }
+}
+
+function comparableEntity<T extends { revision: number }>(entity: T) {
+  const { revision: _revision, ...value } = entity;
+  return JSON.stringify(value);
+}
+
+function entitiesDiffer<T extends { revision: number }>(left: T, right: T) {
+  return comparableEntity(left) !== comparableEntity(right);
+}
+
+function projectsDiffer(left: Project, right: Project) {
+  const {
+    revision: _leftRevision,
+    tasks: _leftTasks,
+    progress: _leftProgress,
+    updatedAt: _leftUpdatedAt,
+    ...leftValue
+  } = left;
+  const {
+    revision: _rightRevision,
+    tasks: _rightTasks,
+    progress: _rightProgress,
+    updatedAt: _rightUpdatedAt,
+    ...rightValue
+  } = right;
+  return JSON.stringify(leftValue) !== JSON.stringify(rightValue);
+}
+
+function flattenTasks(workspace: WorkspaceData) {
+  return workspace.projects.flatMap((project) =>
+    project.tasks.map((task) => ({ projectId: project.id, task })),
+  );
+}
+
+async function replaceProjectTags(project: Project, userId: string) {
+  if (!supabase) {
+    return;
+  }
+
+  const { error: deleteError } = await supabase
+    .from("project_tags")
+    .delete()
+    .eq("project_id", project.id);
+
+  if (deleteError) {
+    throw deleteError;
+  }
+
+  if (!project.tags.length) {
+    return;
+  }
+
+  const { error } = await supabase.from("project_tags").insert(
+    project.tags.map((tag) => ({
+      project_id: project.id,
+      user_id: userId,
+      tag,
+    })),
+  );
+
+  if (error) {
+    throw error;
+  }
+}
+
+async function replaceMaterialLinks(material: ProjectMaterial, userId: string) {
+  if (!supabase) {
+    return;
+  }
+
+  const { error: deleteError } = await supabase
+    .from("material_links")
+    .delete()
+    .eq("material_id", material.id);
+
+  if (deleteError) {
+    throw deleteError;
+  }
+
+  if (!material.links.length) {
+    return;
+  }
+
+  const { error } = await supabase.from("material_links").insert(
+    material.links.map((link) => ({
+      material_id: material.id,
+      user_id: userId,
+      project_id: link.projectId ?? null,
+      task_id: link.taskId ?? null,
+    })),
+  );
+
+  if (error) {
+    throw error;
+  }
+}
+
+async function saveProjectEntity(project: Project, userId: string) {
+  if (!supabase) {
+    return project.revision + 1;
+  }
+
+  const row = {
+    user_id: userId,
+    title: project.title.trim() || "Untitled project",
+    description: project.description,
+    status: project.status,
+    priority: project.priority,
+    start_date: emptyToNull(project.startDate),
+    due_date: emptyToNull(project.dueDate),
+    icon: project.icon,
+    created_at: project.createdAt,
+    updated_at: project.updatedAt,
+  };
+
+  if (project.revision <= 0) {
+    const { data, error } = await supabase
+      .from("projects")
+      .insert({ id: project.id, revision: 1, ...row })
+      .select("revision")
+      .single();
+
+    if (error) {
+      throw error.code === "23505"
+        ? new WorkspaceConflictError("project", project.id)
+        : error;
+    }
+
+    await replaceProjectTags(project, userId);
+    return Number(data.revision);
+  }
+
+  const nextRevision = project.revision + 1;
+  const { data, error } = await supabase
+    .from("projects")
+    .update({ ...row, revision: nextRevision })
+    .eq("id", project.id)
+    .eq("revision", project.revision)
+    .select("revision")
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    throw new WorkspaceConflictError("project", project.id);
+  }
+
+  await replaceProjectTags(project, userId);
+  return Number(data.revision);
+}
+
+async function saveTaskEntity(projectId: string, task: ProjectTask, userId: string) {
+  if (!supabase) {
+    return task.revision + 1;
+  }
+
+  const row = {
+    user_id: userId,
+    project_id: projectId,
+    parent_task_id: task.parentTaskId ?? null,
+    title: task.title,
+    description: task.description ?? "",
+    done: task.done,
+    position: task.position ?? 0,
+    start_date: emptyToNull(task.startDate ?? ""),
+    due_date: emptyToNull(task.dueDate ?? ""),
+    created_at: task.createdAt,
+    updated_at: task.updatedAt,
+  };
+
+  if (task.revision <= 0) {
+    const { data, error } = await supabase
+      .from("project_tasks")
+      .insert({ id: task.id, revision: 1, ...row })
+      .select("revision")
+      .single();
+
+    if (error) {
+      throw error.code === "23505"
+        ? new WorkspaceConflictError("task", task.id)
+        : error;
+    }
+
+    return Number(data.revision);
+  }
+
+  const nextRevision = task.revision + 1;
+  const { data, error } = await supabase
+    .from("project_tasks")
+    .update({ ...row, revision: nextRevision })
+    .eq("id", task.id)
+    .eq("revision", task.revision)
+    .select("revision")
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    throw new WorkspaceConflictError("task", task.id);
+  }
+
+  return Number(data.revision);
+}
+
+async function saveMaterialEntity(material: ProjectMaterial, userId: string) {
+  if (!supabase) {
+    return material.revision + 1;
+  }
+
+  const row = {
+    user_id: userId,
+    title: material.title,
+    kind: material.kind,
+    markdown: material.markdown,
+    file_path: material.filePath ?? null,
+    file_name: material.fileName ?? null,
+    mime_type: material.mimeType ?? null,
+    file_size: material.fileSize ?? null,
+    created_at: material.createdAt,
+    updated_at: material.updatedAt,
+  };
+
+  if (material.revision <= 0) {
+    const { data, error } = await supabase
+      .from("materials")
+      .insert({ id: material.id, revision: 1, ...row })
+      .select("revision")
+      .single();
+
+    if (error) {
+      throw error.code === "23505"
+        ? new WorkspaceConflictError("material", material.id)
+        : error;
+    }
+
+    await replaceMaterialLinks(material, userId);
+    return Number(data.revision);
+  }
+
+  const nextRevision = material.revision + 1;
+  const { data, error } = await supabase
+    .from("materials")
+    .update({ ...row, revision: nextRevision })
+    .eq("id", material.id)
+    .eq("revision", material.revision)
+    .select("revision")
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    throw new WorkspaceConflictError("material", material.id);
+  }
+
+  await replaceMaterialLinks(material, userId);
+  return Number(data.revision);
+}
+
+async function deleteEntity(
+  table: string,
+  kind: WorkspaceEntityKind,
+  id: string,
+  revision: number,
+) {
+  if (!supabase) {
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from(table)
+    .delete()
+    .eq("id", id)
+    .eq("revision", revision)
+    .select("id");
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data?.length) {
+    throw new WorkspaceConflictError(kind, id);
+  }
+}
+
+export async function saveWorkspaceChanges(
+  previousWorkspace: WorkspaceData,
+  nextWorkspace: WorkspaceData,
+): Promise<WorkspaceData> {
+  const previous = normalizeWorkspace(previousWorkspace);
+  const next = normalizeWorkspace(nextWorkspace);
+  const projectRevisions = new Map<string, number>();
+  const taskRevisions = new Map<string, number>();
+  const materialRevisions = new Map<string, number>();
+  const previousProjects = new Map(previous.projects.map((project) => [project.id, project]));
+  const nextProjects = new Map(next.projects.map((project) => [project.id, project]));
+  const previousTasks = new Map(flattenTasks(previous).map((item) => [item.task.id, item]));
+  const nextTasks = new Map(flattenTasks(next).map((item) => [item.task.id, item]));
+  const previousMaterials = new Map(previous.materials.map((material) => [material.id, material]));
+  const nextMaterials = new Map(next.materials.map((material) => [material.id, material]));
+  const userId = await getCurrentUserId();
+  const getTaskDepth = (taskId: string) => {
+    let depth = 0;
+    let parentId = previousTasks.get(taskId)?.task.parentTaskId;
+
+    while (parentId) {
+      depth += 1;
+      parentId = previousTasks.get(parentId)?.task.parentTaskId;
+    }
+
+    return depth;
+  };
+
+  for (const project of next.projects) {
+    const oldProject = previousProjects.get(project.id);
+
+    if (!oldProject || projectsDiffer(oldProject, project)) {
+      projectRevisions.set(
+        project.id,
+        await saveProjectEntity(
+          { ...project, revision: oldProject?.revision ?? project.revision },
+          userId,
+        ),
+      );
+    }
+  }
+
+  const removedTasks = Array.from(previousTasks.entries())
+    .filter(([taskId]) => !nextTasks.has(taskId))
+    .sort(([leftId], [rightId]) => getTaskDepth(rightId) - getTaskDepth(leftId));
+
+  for (const [taskId, item] of removedTasks) {
+    await deleteEntity("project_tasks", "task", taskId, item.task.revision);
+  }
+
+  const changedTasks = Array.from(nextTasks.values())
+    .filter(({ task }) => {
+      const oldTask = previousTasks.get(task.id)?.task;
+      return !oldTask || entitiesDiffer(oldTask, task);
+    })
+    .sort(
+      (left, right) =>
+        Number(Boolean(left.task.parentTaskId)) - Number(Boolean(right.task.parentTaskId)),
+    );
+
+  for (const { projectId, task } of changedTasks) {
+    taskRevisions.set(
+      task.id,
+      await saveTaskEntity(
+        projectId,
+        {
+          ...task,
+          revision: previousTasks.get(task.id)?.task.revision ?? task.revision,
+        },
+        userId,
+      ),
+    );
+  }
+
+  for (const material of next.materials) {
+    const oldMaterial = previousMaterials.get(material.id);
+
+    if (!oldMaterial || entitiesDiffer(oldMaterial, material)) {
+      materialRevisions.set(
+        material.id,
+        await saveMaterialEntity(
+          { ...material, revision: oldMaterial?.revision ?? material.revision },
+          userId,
+        ),
+      );
+    }
+  }
+
+  for (const [materialId, material] of previousMaterials) {
+    if (!nextMaterials.has(materialId)) {
+      await deleteEntity("materials", "material", materialId, material.revision);
+    }
+  }
+
+  for (const [projectId, project] of previousProjects) {
+    if (!nextProjects.has(projectId)) {
+      await deleteEntity("projects", "project", projectId, project.revision);
+    }
+  }
+
+  const savedWorkspace: WorkspaceData = {
+    projects: next.projects.map((project) => ({
+      ...project,
+      revision:
+        projectRevisions.get(project.id) ??
+        previousProjects.get(project.id)?.revision ??
+        project.revision,
+      tasks: project.tasks.map((task) => ({
+        ...task,
+        revision:
+          taskRevisions.get(task.id) ??
+          previousTasks.get(task.id)?.task.revision ??
+          task.revision,
+      })),
+    })),
+    materials: next.materials.map((material) => ({
+      ...material,
+      revision:
+        materialRevisions.get(material.id) ??
+        previousMaterials.get(material.id)?.revision ??
+        material.revision,
+    })),
+  };
+
+  saveWorkspaceToLocalStorage(savedWorkspace);
+  return savedWorkspace;
+}
+
+export function subscribeToWorkspaceChanges(onChange: () => void) {
+  if (!supabase) {
+    return () => undefined;
+  }
+
+  const client = supabase;
+  const channel = client
+    .channel(`workspace:${crypto.randomUUID()}`)
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "projects" },
+      onChange,
+    )
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "project_tasks" },
+      onChange,
+    )
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "materials" },
+      onChange,
+    )
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "project_tags" },
+      onChange,
+    )
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "material_links" },
+      onChange,
+    )
+    .subscribe();
+
+  return () => {
+    void client.removeChannel(channel);
+  };
 }
 
 export async function uploadPdfFile(materialId: string, file: File) {

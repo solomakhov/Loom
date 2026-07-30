@@ -3,6 +3,7 @@ export type ProjectPriority = "low" | "medium" | "high";
 
 export type ProjectTask = {
   id: string;
+  revision: number;
   title: string;
   description?: string;
   done: boolean;
@@ -23,6 +24,7 @@ export type MaterialLink = {
 
 export type ProjectMaterial = {
   id: string;
+  revision: number;
   title: string;
   kind: MaterialKind;
   markdown: string;
@@ -37,6 +39,7 @@ export type ProjectMaterial = {
 
 export type Project = {
   id: string;
+  revision: number;
   title: string;
   description: string;
   status: ProjectStatus;

@@ -84,6 +84,7 @@ export function createProject(draft: ProjectDraft): Project {
 
   return {
     id: crypto.randomUUID(),
+    revision: 0,
     title: draft.title.trim(),
     description: draft.description.trim(),
     status: draft.status,
