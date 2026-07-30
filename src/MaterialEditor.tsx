@@ -94,6 +94,12 @@ function looksLikeMarkdown(value: string) {
   );
 }
 
+function normalizeMarkdownForEditor(value: string) {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .replace(/(?:\s*<br\s*\/?>\s*)+/gi, " · ");
+}
+
 function containsExecutableHtml(value: string) {
   return (
     /<!doctype\b/i.test(value) ||
@@ -203,9 +209,15 @@ export function MaterialEditor({ markdown, onChange, onSave }: MaterialEditorPro
           <button
             className="text-button"
             type="button"
-            onClick={() => setMarkdownError(null)}
+            onClick={() => {
+              const normalizedMarkdown = normalizeMarkdownForEditor(sourceMarkdown);
+
+              onChange(normalizedMarkdown);
+              onSave(normalizedMarkdown);
+              setMarkdownError(null);
+            }}
           >
-            Попробовать визуальный режим
+            Исправить разметку и открыть визуальный режим
           </button>
         ) : null}
         <textarea
@@ -236,7 +248,7 @@ export function MaterialEditor({ markdown, onChange, onSave }: MaterialEditorPro
 
     event.preventDefault();
     event.stopPropagation();
-    const normalizedText = pastedText.replace(/\r\n?/g, "\n");
+    const normalizedText = normalizeMarkdownForEditor(pastedText);
 
     editor.focus(
       () => editor.insertMarkdown(normalizedText),
