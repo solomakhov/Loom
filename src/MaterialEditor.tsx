@@ -42,6 +42,7 @@ type MaterialPreviewProps = {
 function looksLikeMarkdown(value: string) {
   return (
     /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s|```|~~~|---\s*$)/m.test(value) ||
+    /(^|\n)\s*\|?.+\|.+\n\s*\|?\s*:?-{3,}/m.test(value) ||
     /(\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|`[^`]+`|\[[^\]]+\]\([^)]+\))/.test(value)
   );
 }
@@ -152,14 +153,9 @@ export function MaterialEditor({ markdown, onChange, onSave }: MaterialEditorPro
 
   function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
     const pastedText = event.clipboardData.getData("text/plain");
-    const pastedHtml = event.clipboardData.getData("text/html");
     const editor = editorRef.current;
 
-    if (
-      !pastedText ||
-      !editor ||
-      (pastedHtml && !looksLikeMarkdown(pastedText))
-    ) {
+    if (!pastedText || !editor || !looksLikeMarkdown(pastedText)) {
       return;
     }
 

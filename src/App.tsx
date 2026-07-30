@@ -1486,12 +1486,19 @@ export function App() {
     const material = latestWorkspaceRef.current.materials.find(
       (item) => item.id === materialId,
     );
+    const persistedMaterial = persistedWorkspaceRef.current.materials.find(
+      (item) => item.id === materialId,
+    );
 
     if (!material) {
       return;
     }
 
-    if (material.markdown === markdown && saveTimerRef.current === null) {
+    if (
+      material.markdown === markdown &&
+      persistedMaterial?.markdown === markdown &&
+      saveTimerRef.current === null
+    ) {
       return;
     }
 
