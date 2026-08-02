@@ -780,6 +780,13 @@ export class WorkspaceConflictError extends Error {
   }
 }
 
+export type WorkspaceRealtimeChange = {
+  table: "projects" | "project_tasks" | "materials" | "project_tags" | "material_links";
+  eventType: "INSERT" | "UPDATE" | "DELETE";
+  entityId?: string;
+  revision?: number;
+};
+
 function comparableEntity<T extends { revision: number }>(entity: T) {
   const { revision: _revision, ...value } = entity;
   return JSON.stringify(value);
@@ -1197,38 +1204,58 @@ export async function saveWorkspaceChanges(
   return savedWorkspace;
 }
 
-export function subscribeToWorkspaceChanges(onChange: () => void) {
+export function subscribeToWorkspaceChanges(
+  onChange: (change: WorkspaceRealtimeChange) => void,
+) {
   if (!supabase) {
     return () => undefined;
   }
 
   const client = supabase;
+  const notify = (
+    table: WorkspaceRealtimeChange["table"],
+    payload: {
+      eventType: "INSERT" | "UPDATE" | "DELETE";
+      new: Record<string, unknown>;
+      old: Record<string, unknown>;
+    },
+  ) => {
+    const row = payload.eventType === "DELETE" ? payload.old : payload.new;
+    const revision = Number(row.revision);
+
+    onChange({
+      table,
+      eventType: payload.eventType,
+      entityId: typeof row.id === "string" ? row.id : undefined,
+      revision: Number.isFinite(revision) ? revision : undefined,
+    });
+  };
   const channel = client
     .channel(`workspace:${crypto.randomUUID()}`)
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "projects" },
-      onChange,
+      (payload) => notify("projects", payload),
     )
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "project_tasks" },
-      onChange,
+      (payload) => notify("project_tasks", payload),
     )
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "materials" },
-      onChange,
+      (payload) => notify("materials", payload),
     )
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "project_tags" },
-      onChange,
+      (payload) => notify("project_tags", payload),
     )
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "material_links" },
-      onChange,
+      (payload) => notify("material_links", payload),
     )
     .subscribe();
 

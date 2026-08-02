@@ -36,6 +36,7 @@ import {
   subscribeToWorkspaceChanges,
   uploadPdfFile,
   WorkspaceConflictError,
+  type WorkspaceRealtimeChange,
 } from "./storage";
 import { isSupabaseConfigured, supabase } from "./supabase";
 import {
@@ -298,6 +299,32 @@ function flattenWorkspaceTasks(workspace: WorkspaceData) {
   return workspace.projects.flatMap((project) => project.tasks);
 }
 
+function isRealtimeChangeAlreadyApplied(
+  change: WorkspaceRealtimeChange,
+  workspace: WorkspaceData,
+) {
+  if (!change.entityId) {
+    return false;
+  }
+
+  const entity =
+    change.table === "projects"
+      ? workspace.projects.find((project) => project.id === change.entityId)
+      : change.table === "project_tasks"
+        ? flattenWorkspaceTasks(workspace).find((task) => task.id === change.entityId)
+        : change.table === "materials"
+          ? workspace.materials.find((material) => material.id === change.entityId)
+          : undefined;
+
+  if (change.eventType === "DELETE") {
+    return !entity;
+  }
+
+  return Boolean(
+    entity && change.revision !== undefined && entity.revision >= change.revision,
+  );
+}
+
 function mergeRealtimeWorkspaces(
   base: WorkspaceData,
   local: WorkspaceData,
@@ -367,6 +394,7 @@ export function App() {
   const latestWorkspaceRef = useRef<WorkspaceData>({ projects: [], materials: [] });
   const persistedWorkspaceRef = useRef<WorkspaceData>({ projects: [], materials: [] });
   const realtimeTimerRef = useRef<number | null>(null);
+  const pendingRealtimeChangesRef = useRef<WorkspaceRealtimeChange[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [materials, setMaterials] = useState<ProjectMaterial[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -630,7 +658,9 @@ export function App() {
       return;
     }
 
-    const unsubscribe = subscribeToWorkspaceChanges(() => {
+    const unsubscribe = subscribeToWorkspaceChanges((change) => {
+      pendingRealtimeChangesRef.current.push(change);
+
       if (realtimeTimerRef.current) {
         window.clearTimeout(realtimeTimerRef.current);
       }
@@ -640,6 +670,20 @@ export function App() {
 
         try {
           await saveQueueRef.current.catch(() => undefined);
+          const pendingChanges = pendingRealtimeChangesRef.current.splice(0);
+
+          if (
+            pendingChanges.length > 0 &&
+            pendingChanges.every((pendingChange) =>
+              isRealtimeChangeAlreadyApplied(
+                pendingChange,
+                persistedWorkspaceRef.current,
+              ),
+            )
+          ) {
+            return;
+          }
+
           const remoteWorkspace = await loadWorkspace({ importLocalIfEmpty: false });
           const merged = mergeRealtimeWorkspaces(
             persistedWorkspaceRef.current,
@@ -684,6 +728,8 @@ export function App() {
         window.clearTimeout(realtimeTimerRef.current);
         realtimeTimerRef.current = null;
       }
+
+      pendingRealtimeChangesRef.current = [];
     };
   }, [session]);
 

@@ -396,6 +396,62 @@ h3 {
   margin-top: 24px;
 }
 
+@media (min-width: 861px) {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    overflow: hidden;
+  }
+
+  .app-shell {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .sidebar-shell,
+  .sidebar-shell .sidebar {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .sidebar-shell .sidebar {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .project-list,
+  .workspace-search-results {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 4px;
+    scrollbar-color: #a1aea7 transparent;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+  }
+
+  .project-list {
+    align-content: start;
+  }
+
+  .workspace-search-results {
+    max-height: none;
+  }
+
+  .project-view {
+    height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
 .project-row {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr);
