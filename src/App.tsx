@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import type { AiMaterialDraft } from "./aiAssistant";
 import { AiAssistantDialog } from "./components/AiAssistantDialog";
+import { BackupDialog } from "./components/BackupDialog";
 import {
   AuthPanel,
   PasswordRecoveryPanel,
@@ -68,6 +69,34 @@ import {
 } from "./types";
 
 const NAVIGATION_STORAGE_PREFIX = "loom:navigation";
+const PROJECT_SORT_STORAGE_KEY = "loom:project-sort.v1";
+const PROJECT_USAGE_STORAGE_KEY = "loom:project-usage.v1";
+
+type ProjectSortMode = "recent" | "title";
+
+function loadProjectSortMode(): ProjectSortMode {
+  return window.localStorage.getItem(PROJECT_SORT_STORAGE_KEY) === "title"
+    ? "title"
+    : "recent";
+}
+
+function loadProjectUsage() {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(PROJECT_USAGE_STORAGE_KEY) ?? "{}");
+
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return Object.fromEntries(
+        Object.entries(value).filter((entry): entry is [string, number] =>
+          typeof entry[1] === "number" && Number.isFinite(entry[1]),
+        ),
+      );
+    }
+  } catch {
+    // Ignore a damaged local preference and rebuild it as projects are opened.
+  }
+
+  return {};
+}
 
 type SavedNavigation = {
   projectId: string;
@@ -303,6 +332,31 @@ function isRealtimeChangeAlreadyApplied(
   change: WorkspaceRealtimeChange,
   workspace: WorkspaceData,
 ) {
+  if (change.table === "project_tags") {
+    if (!change.projectId || change.tag === undefined) {
+      return false;
+    }
+
+    const project = workspace.projects.find((item) => item.id === change.projectId);
+    const tagExists = Boolean(project?.tags.includes(change.tag));
+    return change.eventType === "DELETE" ? !tagExists : tagExists;
+  }
+
+  if (change.table === "material_links") {
+    if (!change.materialId) {
+      return false;
+    }
+
+    const material = workspace.materials.find((item) => item.id === change.materialId);
+    const linkExists = Boolean(
+      material?.links.some(
+        (link) =>
+          link.projectId === change.projectId && link.taskId === change.taskId,
+      ),
+    );
+    return change.eventType === "DELETE" ? !linkExists : linkExists;
+  }
+
   if (!change.entityId) {
     return false;
   }
@@ -323,6 +377,39 @@ function isRealtimeChangeAlreadyApplied(
   return Boolean(
     entity && change.revision !== undefined && entity.revision >= change.revision,
   );
+}
+
+function getRealtimeChangeKey(change: WorkspaceRealtimeChange) {
+  if (change.entityId) {
+    return `${change.table}:${change.entityId}`;
+  }
+
+  if (change.table === "project_tags" && change.projectId && change.tag !== undefined) {
+    return `${change.table}:${change.projectId}:${change.tag}`;
+  }
+
+  if (change.table === "material_links" && change.materialId) {
+    return `${change.table}:${change.materialId}:${change.projectId ?? ""}:${change.taskId ?? ""}`;
+  }
+
+  return "";
+}
+
+function coalesceRealtimeChanges(changes: WorkspaceRealtimeChange[]) {
+  const keyedChanges = new Map<string, WorkspaceRealtimeChange>();
+  const unkeyedChanges: WorkspaceRealtimeChange[] = [];
+
+  for (const change of changes) {
+    const key = getRealtimeChangeKey(change);
+
+    if (key) {
+      keyedChanges.set(key, change);
+    } else {
+      unkeyedChanges.push(change);
+    }
+  }
+
+  return [...keyedChanges.values(), ...unkeyedChanges];
 }
 
 function mergeRealtimeWorkspaces(
@@ -400,6 +487,8 @@ export function App() {
   const [selectedId, setSelectedId] = useState("");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | "all">("all");
+  const [projectSortMode, setProjectSortMode] = useState<ProjectSortMode>(loadProjectSortMode);
+  const [projectUsage, setProjectUsage] = useState<Record<string, number>>(loadProjectUsage);
   const [draft, setDraft] = useState<ProjectDraft>(emptyDraft);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -420,6 +509,7 @@ export function App() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(() => isRecoveryUrl());
   const [isDigestSettingsOpen, setIsDigestSettingsOpen] = useState(false);
+  const [isBackupOpen, setIsBackupOpen] = useState(false);
   const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
   const [isProjectDrawerOpen, setIsProjectDrawerOpen] = useState(false);
   const [remoteConflict, setRemoteConflict] = useState<WorkspaceData | null>(null);
@@ -670,7 +760,9 @@ export function App() {
 
         try {
           await saveQueueRef.current.catch(() => undefined);
-          const pendingChanges = pendingRealtimeChangesRef.current.splice(0);
+          const pendingChanges = coalesceRealtimeChanges(
+            pendingRealtimeChangesRef.current.splice(0),
+          );
 
           if (
             pendingChanges.length > 0 &&
@@ -880,11 +972,35 @@ export function App() {
     session?.user.id,
   ]);
 
+  const sortedProjects = useMemo(() => {
+    return [...projects].sort((left, right) => {
+      if (projectSortMode === "title") {
+        return left.title.localeCompare(right.title, "ru-RU", {
+          numeric: true,
+          sensitivity: "base",
+        });
+      }
+
+      const getLastUsedAt = (project: Project) => {
+        const lastOpenedAt = projectUsage[project.id];
+
+        if (lastOpenedAt !== undefined) {
+          return lastOpenedAt;
+        }
+
+        const updatedAt = Date.parse(project.updatedAt);
+        return Number.isFinite(updatedAt) ? updatedAt : 0;
+      };
+
+      return getLastUsedAt(right) - getLastUsedAt(left);
+    });
+  }, [projectSortMode, projectUsage, projects]);
+
   const filteredProjects = useMemo(() => {
-    return projects.filter(
+    return sortedProjects.filter(
       (project) => statusFilter === "all" || project.status === statusFilter,
     );
-  }, [projects, statusFilter]);
+  }, [sortedProjects, statusFilter]);
 
   const searchResults = useMemo<WorkspaceSearchResult[]>(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase("ru-RU");
@@ -900,7 +1016,7 @@ export function App() {
         .toLocaleLowerCase("ru-RU")
         .includes(normalizedQuery);
 
-    const projectResults = projects
+    const projectResults = sortedProjects
       .filter((project) =>
         matches([project.title, project.description, ...project.tags]),
       )
@@ -912,7 +1028,7 @@ export function App() {
         projectId: project.id,
       }));
 
-    const taskResults = projects.flatMap((project) =>
+    const taskResults = sortedProjects.flatMap((project) =>
       project.tasks
         .filter((task) => matches([task.title, task.description]))
         .map<WorkspaceSearchResult>((task) => ({
@@ -953,9 +1069,23 @@ export function App() {
       });
 
     return [...projectResults, ...taskResults, ...materialResults].slice(0, 40);
-  }, [materials, projects, query]);
+  }, [materials, projects, query, sortedProjects]);
+
+  function changeProjectSortMode(sortMode: ProjectSortMode) {
+    setProjectSortMode(sortMode);
+    window.localStorage.setItem(PROJECT_SORT_STORAGE_KEY, sortMode);
+  }
+
+  function markProjectOpened(projectId: string) {
+    setProjectUsage((current) => {
+      const next = { ...current, [projectId]: Date.now() };
+      window.localStorage.setItem(PROJECT_USAGE_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
 
   function openProject(projectId: string, section: ProjectSection = "tasks") {
+    markProjectOpened(projectId);
     pushNavigationUrl({
       projectId,
       taskId: "",
@@ -1033,6 +1163,7 @@ export function App() {
     }
 
     if (result.kind === "task" && result.projectId && result.taskId) {
+      markProjectOpened(result.projectId);
       pushNavigationUrl({
         projectId: result.projectId,
         taskId: result.taskId,
@@ -1059,6 +1190,8 @@ export function App() {
       if (!targetProjectId) {
         return;
       }
+
+      markProjectOpened(targetProjectId);
 
       const selectionWillChange =
         targetProjectId !== selectedProject?.id || Boolean(selectedTaskId);
@@ -1210,6 +1343,46 @@ export function App() {
     setRemoteConflict(null);
     setStorageError("");
     setSaveStatus("saved");
+  }
+
+  async function restoreWorkspace(workspace: WorkspaceData) {
+    if (remoteConflict) {
+      throw new Error("Сначала разрешите текущий конфликт изменений.");
+    }
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    workspaceVersionRef.current += 1;
+    setSaveStatus("saving");
+
+    try {
+      const restoreOperation = saveQueueRef.current
+        .catch(() => undefined)
+        .then(() =>
+          saveWorkspaceChanges(persistedWorkspaceRef.current, workspace),
+        );
+      saveQueueRef.current = restoreOperation.then(() => undefined);
+      const savedWorkspace = await restoreOperation;
+
+      persistedWorkspaceRef.current = savedWorkspace;
+      latestWorkspaceRef.current = savedWorkspace;
+      setProjects(savedWorkspace.projects);
+      setMaterials(savedWorkspace.materials);
+      setSelectedId(savedWorkspace.projects[0]?.id ?? "");
+      setSelectedTaskId("");
+      setSelectedMaterialId("");
+      setProjectSection("tasks");
+      setMaterialScope("project");
+      setStorageError("");
+      setRemoteConflict(null);
+      setSaveStatus("saved");
+    } catch (error) {
+      setSaveStatus("error");
+      throw error;
+    }
   }
 
   function commitProjects(nextProjects: Project[], options: { debounce?: boolean } = {}) {
@@ -1751,12 +1924,14 @@ export function App() {
           hasSession={Boolean(session)}
           query={query}
           statusFilter={statusFilter}
+          sortMode={projectSortMode}
           searchResults={searchResults}
           projects={projects}
           filteredProjects={filteredProjects}
           selectedProject={selectedProject}
           onQueryChange={setQuery}
           onStatusFilterChange={setStatusFilter}
+          onSortModeChange={changeProjectSortMode}
           onOpenSearchResult={openSearchResult}
           onOpenProject={openProject}
           onCreateProject={() => {
@@ -1766,6 +1941,10 @@ export function App() {
           onOpenDigestSettings={() => {
             closeProjectDrawer();
             setIsDigestSettingsOpen(true);
+          }}
+          onOpenBackup={() => {
+            closeProjectDrawer();
+            setIsBackupOpen(true);
           }}
           onSignOut={() => {
             closeProjectDrawer();
@@ -1986,6 +2165,14 @@ export function App() {
         <DigestSettingsDialog
           accountEmail={session.user.email}
           onClose={() => setIsDigestSettingsOpen(false)}
+        />
+      ) : null}
+
+      {isBackupOpen ? (
+        <BackupDialog
+          workspace={latestWorkspaceRef.current}
+          onRestore={restoreWorkspace}
+          onClose={() => setIsBackupOpen(false)}
         />
       ) : null}
 

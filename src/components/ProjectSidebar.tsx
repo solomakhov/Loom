@@ -1,4 +1,4 @@
-import { Bell, FileText, Filter, ListChecks, LogOut, Plus, Search, X } from "lucide-react";
+import { Bell, Download, FileText, Filter, ListChecks, LogOut, Plus, Search, X } from "lucide-react";
 import { formatDate, statusLabels, type WorkspaceSearchResult } from "../projectModel";
 import type { Project, ProjectStatus } from "../types";
 
@@ -6,16 +6,19 @@ type ProjectSidebarProps = {
   hasSession: boolean;
   query: string;
   statusFilter: ProjectStatus | "all";
+  sortMode: "recent" | "title";
   searchResults: WorkspaceSearchResult[];
   projects: Project[];
   filteredProjects: Project[];
   selectedProject?: Project;
   onQueryChange: (query: string) => void;
   onStatusFilterChange: (status: ProjectStatus | "all") => void;
+  onSortModeChange: (sortMode: "recent" | "title") => void;
   onOpenSearchResult: (result: WorkspaceSearchResult) => void;
   onOpenProject: (projectId: string) => void;
   onCreateProject: () => void;
   onOpenDigestSettings: () => void;
+  onOpenBackup: () => void;
   onSignOut: () => void;
   onClose?: () => void;
 };
@@ -24,16 +27,19 @@ export function ProjectSidebar({
   hasSession,
   query,
   statusFilter,
+  sortMode,
   searchResults,
   projects,
   filteredProjects,
   selectedProject,
   onQueryChange,
   onStatusFilterChange,
+  onSortModeChange,
   onOpenSearchResult,
   onOpenProject,
   onCreateProject,
   onOpenDigestSettings,
+  onOpenBackup,
   onSignOut,
   onClose,
 }: ProjectSidebarProps) {
@@ -57,6 +63,14 @@ export function ProjectSidebar({
           ) : null}
           {hasSession ? (
             <>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={onOpenBackup}
+                title="Резервная копия"
+              >
+                <Download size={17} />
+              </button>
               <button
                 className="icon-button"
                 type="button"
@@ -86,7 +100,7 @@ export function ProjectSidebar({
         <input
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="Проекты, задачи, материалы"
+          placeholder="Название проекта, задача, материал"
           aria-label="Поиск по рабочему пространству"
         />
         {query ? (
@@ -136,18 +150,32 @@ export function ProjectSidebar({
         </div>
       ) : (
         <>
-          <div className="filter-row" aria-label="Фильтр по статусу">
-            <Filter size={15} />
-            {(["all", "active", "paused", "done"] as const).map((status) => (
-              <button
-                key={status}
-                className={statusFilter === status ? "filter-pill active" : "filter-pill"}
-                type="button"
-                onClick={() => onStatusFilterChange(status)}
+          <div className="project-list-toolbar">
+            <div className="filter-row" aria-label="Фильтр по статусу">
+              <Filter size={15} />
+              {(["all", "active", "paused", "done"] as const).map((status) => (
+                <button
+                  key={status}
+                  className={statusFilter === status ? "filter-pill active" : "filter-pill"}
+                  type="button"
+                  onClick={() => onStatusFilterChange(status)}
+                >
+                  {status === "all" ? "Все" : statusLabels[status]}
+                </button>
+              ))}
+            </div>
+            <label className="project-sort-control">
+              <span>Сортировка</span>
+              <select
+                value={sortMode}
+                onChange={(event) =>
+                  onSortModeChange(event.target.value as "recent" | "title")
+                }
               >
-                {status === "all" ? "Все" : statusLabels[status]}
-              </button>
-            ))}
+                <option value="recent">Недавние</option>
+                <option value="title">По названию</option>
+              </select>
+            </label>
           </div>
 
           <div className="project-list">

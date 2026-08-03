@@ -785,6 +785,10 @@ export type WorkspaceRealtimeChange = {
   eventType: "INSERT" | "UPDATE" | "DELETE";
   entityId?: string;
   revision?: number;
+  projectId?: string;
+  materialId?: string;
+  taskId?: string;
+  tag?: string;
 };
 
 function comparableEntity<T extends { revision: number }>(entity: T) {
@@ -1228,6 +1232,10 @@ export function subscribeToWorkspaceChanges(
       eventType: payload.eventType,
       entityId: typeof row.id === "string" ? row.id : undefined,
       revision: Number.isFinite(revision) ? revision : undefined,
+      projectId: typeof row.project_id === "string" ? row.project_id : undefined,
+      materialId: typeof row.material_id === "string" ? row.material_id : undefined,
+      taskId: typeof row.task_id === "string" ? row.task_id : undefined,
+      tag: typeof row.tag === "string" ? row.tag : undefined,
     });
   };
   const channel = client
