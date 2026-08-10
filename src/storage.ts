@@ -800,6 +800,13 @@ function entitiesDiffer<T extends { revision: number }>(left: T, right: T) {
   return comparableEntity(left) !== comparableEntity(right);
 }
 
+function materialLinksDiffer(left: ProjectMaterial, right: ProjectMaterial) {
+  const linkKey = (link: MaterialLink) => `${link.projectId ?? ""}:${link.taskId ?? ""}`;
+  const leftLinks = left.links.map(linkKey).sort();
+  const rightLinks = right.links.map(linkKey).sort();
+  return JSON.stringify(leftLinks) !== JSON.stringify(rightLinks);
+}
+
 function projectsDiffer(left: Project, right: Project) {
   const {
     revision: _leftRevision,
@@ -998,7 +1005,11 @@ async function saveTaskEntity(projectId: string, task: ProjectTask, userId: stri
   return Number(data.revision);
 }
 
-async function saveMaterialEntity(material: ProjectMaterial, userId: string) {
+async function saveMaterialEntity(
+  material: ProjectMaterial,
+  userId: string,
+  linksChanged: boolean,
+) {
   if (!supabase) {
     return material.revision + 1;
   }
@@ -1050,7 +1061,9 @@ async function saveMaterialEntity(material: ProjectMaterial, userId: string) {
     throw new WorkspaceConflictError("material", material.id);
   }
 
-  await replaceMaterialLinks(material, userId);
+  if (linksChanged) {
+    await replaceMaterialLinks(material, userId);
+  }
   return Number(data.revision);
 }
 
@@ -1163,6 +1176,7 @@ export async function saveWorkspaceChanges(
         await saveMaterialEntity(
           { ...material, revision: oldMaterial?.revision ?? material.revision },
           userId,
+          !oldMaterial || materialLinksDiffer(oldMaterial, material),
         ),
       );
     }
@@ -1238,6 +1252,8 @@ export function subscribeToWorkspaceChanges(
       tag: typeof row.tag === "string" ? row.tag : undefined,
     });
   };
+  // Tag and link writes are covered by their parent entity revision. Listening to their
+  // delete-and-insert replacement events would expose a transient, incomplete state.
   const channel = client
     .channel(`workspace:${crypto.randomUUID()}`)
     .on(
@@ -1254,16 +1270,6 @@ export function subscribeToWorkspaceChanges(
       "postgres_changes",
       { event: "*", schema: "public", table: "materials" },
       (payload) => notify("materials", payload),
-    )
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "project_tags" },
-      (payload) => notify("project_tags", payload),
-    )
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "material_links" },
-      (payload) => notify("material_links", payload),
     )
     .subscribe();
 

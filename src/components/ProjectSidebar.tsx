@@ -85,10 +85,11 @@ export function ProjectSidebar({
             </>
           ) : null}
           <button
-            className="icon-button primary"
+            className="icon-button primary sidebar-create-project"
             type="button"
             onClick={onCreateProject}
             title="Создать проект"
+            aria-label="Создать проект"
           >
             <Plus size={18} />
           </button>

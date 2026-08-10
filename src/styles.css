@@ -119,8 +119,32 @@ button {
 
 .sidebar-actions {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
+  margin-left: auto;
+}
+
+.sidebar .brand-row {
+  flex-wrap: wrap;
+}
+
+.sidebar-actions .icon-button {
+  flex: 0 0 38px;
+}
+
+.sidebar-actions .sidebar-create-project {
+  width: 42px;
+  height: 42px;
+  flex-basis: 42px;
+  border-color: #0c392f;
+  background: #0c392f;
+  box-shadow: 0 3px 10px rgba(12, 57, 47, 0.22);
+}
+
+.sidebar-actions .sidebar-create-project:hover {
+  border-color: #082c25;
+  background: #082c25;
 }
 
 .brand-row,
