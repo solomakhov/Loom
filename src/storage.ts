@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { getTaskDescendantIds, getTaskSiblings, normalizeTaskPositions } from "./projectModel";
 import {
   MaterialLink,
   Project,
@@ -6,6 +7,8 @@ import {
   ProjectPriority,
   ProjectStatus,
   ProjectTask,
+  TaskDrag,
+  TaskDropTarget,
   WorkspaceData,
 } from "./types";
 
@@ -235,6 +238,22 @@ function timestampFromDb(value: string | null) {
   return value ?? new Date().toISOString();
 }
 
+function buildTaskFromRow(task: ProjectTaskRow): ProjectTask {
+  return {
+    id: task.id,
+    revision: task.revision,
+    title: task.title,
+    description: task.description ?? "",
+    done: task.done,
+    parentTaskId: task.parent_task_id ?? undefined,
+    position: task.position,
+    startDate: dateFromDb(task.start_date),
+    dueDate: dateFromDb(task.due_date),
+    createdAt: task.created_at,
+    updatedAt: task.updated_at,
+  };
+}
+
 function buildProjectFromRows(
   projectRow: ProjectRow,
   tagRows: ProjectTagRow[],
@@ -246,19 +265,7 @@ function buildProjectFromRows(
       const parentCompare = (a.parent_task_id ?? "").localeCompare(b.parent_task_id ?? "");
       return parentCompare || a.position - b.position;
     })
-    .map((task) => ({
-      id: task.id,
-      revision: task.revision,
-      title: task.title,
-      description: task.description ?? "",
-      done: task.done,
-      parentTaskId: task.parent_task_id ?? undefined,
-      position: task.position,
-      startDate: dateFromDb(task.start_date),
-      dueDate: dateFromDb(task.due_date),
-      createdAt: task.created_at,
-      updatedAt: task.updated_at,
-    }));
+    .map(buildTaskFromRow);
 
   return normalizeProject({
     id: projectRow.id,
@@ -1109,13 +1116,15 @@ export async function saveWorkspaceChanges(
   const previousMaterials = new Map(previous.materials.map((material) => [material.id, material]));
   const nextMaterials = new Map(next.materials.map((material) => [material.id, material]));
   const userId = await getCurrentUserId();
-  const getTaskDepth = (taskId: string) => {
+  const getTaskDepth = (tasks: typeof previousTasks, taskId: string) => {
     let depth = 0;
-    let parentId = previousTasks.get(taskId)?.task.parentTaskId;
+    let parentId = tasks.get(taskId)?.task.parentTaskId;
+    const visited = new Set([taskId]);
 
-    while (parentId) {
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId);
       depth += 1;
-      parentId = previousTasks.get(parentId)?.task.parentTaskId;
+      parentId = tasks.get(parentId)?.task.parentTaskId;
     }
 
     return depth;
@@ -1137,20 +1146,18 @@ export async function saveWorkspaceChanges(
 
   const removedTasks = Array.from(previousTasks.entries())
     .filter(([taskId]) => !nextTasks.has(taskId))
-    .sort(([leftId], [rightId]) => getTaskDepth(rightId) - getTaskDepth(leftId));
-
-  for (const [taskId, item] of removedTasks) {
-    await deleteEntity("project_tasks", "task", taskId, item.task.revision);
-  }
+    .sort(([leftId], [rightId]) =>
+      getTaskDepth(previousTasks, rightId) - getTaskDepth(previousTasks, leftId),
+    );
 
   const changedTasks = Array.from(nextTasks.values())
-    .filter(({ task }) => {
-      const oldTask = previousTasks.get(task.id)?.task;
-      return !oldTask || entitiesDiffer(oldTask, task);
+    .filter(({ projectId, task }) => {
+      const oldItem = previousTasks.get(task.id);
+      return !oldItem || oldItem.projectId !== projectId || entitiesDiffer(oldItem.task, task);
     })
     .sort(
       (left, right) =>
-        Number(Boolean(left.task.parentTaskId)) - Number(Boolean(right.task.parentTaskId)),
+        getTaskDepth(nextTasks, left.task.id) - getTaskDepth(nextTasks, right.task.id),
     );
 
   for (const { projectId, task } of changedTasks) {
@@ -1165,6 +1172,11 @@ export async function saveWorkspaceChanges(
         userId,
       ),
     );
+  }
+
+  // Reassign retained children before deleting their former parents during restore.
+  for (const [taskId, item] of removedTasks) {
+    await deleteEntity("project_tasks", "task", taskId, item.task.revision);
   }
 
   for (const material of next.materials) {
@@ -1220,6 +1232,103 @@ export async function saveWorkspaceChanges(
 
   saveWorkspaceToLocalStorage(savedWorkspace);
   return savedWorkspace;
+}
+
+export async function moveWorkspaceTask(
+  workspace: WorkspaceData,
+  drag: TaskDrag,
+  target: TaskDropTarget,
+): Promise<WorkspaceData> {
+  const source = workspace.projects.find((project) => project.id === drag.projectId);
+  const destination = workspace.projects.find((project) => project.id === target.projectId);
+  const task = source?.tasks.find((item) => item.id === drag.taskId);
+  const acrossProjects = drag.projectId !== target.projectId;
+  const anchor = destination?.tasks.find((item) => item.id === target.taskId);
+
+  if (
+    !source || !destination || !task || task.parentTaskId !== drag.parentTaskId ||
+    (!acrossProjects && (!anchor || anchor.id === task.id || anchor.parentTaskId !== task.parentTaskId))
+  ) {
+    throw new WorkspaceConflictError("task", drag.taskId);
+  }
+
+  if (supabase) {
+    const { data, error } = await supabase.rpc("move_project_task", {
+      task_id: task.id,
+      source_project_id: source.id,
+      target_project_id: destination.id,
+      expected_revision: task.revision,
+      anchor_task_id: target.taskId ?? null,
+      place_after: target.after ?? false,
+    });
+
+    if (error) {
+      if (error.code === "40001") {
+        throw new WorkspaceConflictError("task", task.id);
+      }
+      throw error;
+    }
+
+    const rows = data as ProjectTaskRow[];
+    const changedIds = new Set(rows.map((row) => row.id));
+    return {
+      ...workspace,
+      projects: workspace.projects.map((project) =>
+        project.id === source.id || project.id === destination.id
+          ? normalizeProject({
+              ...project,
+              tasks: [
+                ...project.tasks.filter((item) => !changedIds.has(item.id)),
+                ...rows.filter((row) => row.project_id === project.id).map(buildTaskFromRow),
+              ],
+            })
+          : project,
+      ),
+    };
+  }
+
+  const now = new Date().toISOString();
+  let sourceTasks: ProjectTask[];
+  let destinationTasks = destination.tasks;
+
+  if (acrossProjects) {
+    const branch = getTaskDescendantIds(source.tasks, task.id);
+    sourceTasks = normalizeTaskPositions(source.tasks.filter((item) => !branch.has(item.id)));
+    const destinationRoots = getTaskSiblings(destination.tasks);
+    const lastPosition = destinationRoots[destinationRoots.length - 1]?.position ?? -1;
+    destinationTasks = [
+      ...destination.tasks,
+      ...source.tasks.filter((item) => branch.has(item.id)).map((item) =>
+        item.id === task.id
+          ? { ...item, parentTaskId: undefined, position: lastPosition + 1, updatedAt: now }
+          : { ...item, updatedAt: now },
+      ),
+    ];
+  } else {
+    const siblings = getTaskSiblings(source.tasks, task.parentTaskId).filter((item) => item.id !== task.id);
+    const index = siblings.findIndex((item) => item.id === target.taskId) + (target.after ? 1 : 0);
+    siblings.splice(index, 0, task);
+    const positions = new Map(siblings.map((item, position) => [item.id, position]));
+    sourceTasks = source.tasks.map((item) => {
+      const position = positions.get(item.id);
+      return position === undefined || position === item.position
+        ? item
+        : { ...item, position, updatedAt: now };
+    });
+  }
+
+  return saveWorkspaceChanges(workspace, {
+    ...workspace,
+    projects: workspace.projects.map((project) => {
+      if (project.id === source.id) {
+        return { ...project, tasks: sourceTasks };
+      }
+      if (project.id === destination.id) {
+        return { ...project, tasks: destinationTasks };
+      }
+      return project;
+    }),
+  });
 }
 
 export function subscribeToWorkspaceChanges(

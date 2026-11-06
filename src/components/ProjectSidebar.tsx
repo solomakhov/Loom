@@ -1,6 +1,13 @@
 import { Bell, Download, FileText, Filter, ListChecks, LogOut, Plus, Search, X } from "lucide-react";
+import { useState } from "react";
 import { formatDate, statusLabels, type WorkspaceSearchResult } from "../projectModel";
-import type { Project, ProjectStatus } from "../types";
+import {
+  TASK_DRAG_TYPE,
+  type Project,
+  type ProjectStatus,
+  type TaskDrag,
+  type TaskDropTarget,
+} from "../types";
 
 type ProjectSidebarProps = {
   hasSession: boolean;
@@ -11,6 +18,8 @@ type ProjectSidebarProps = {
   projects: Project[];
   filteredProjects: Project[];
   selectedProject?: Project;
+  draggedTask: TaskDrag | null;
+  onDropTask: (target: TaskDropTarget) => void;
   onQueryChange: (query: string) => void;
   onStatusFilterChange: (status: ProjectStatus | "all") => void;
   onSortModeChange: (sortMode: "recent" | "title") => void;
@@ -32,6 +41,8 @@ export function ProjectSidebar({
   projects,
   filteredProjects,
   selectedProject,
+  draggedTask,
+  onDropTask,
   onQueryChange,
   onStatusFilterChange,
   onSortModeChange,
@@ -43,6 +54,8 @@ export function ProjectSidebar({
   onSignOut,
   onClose,
 }: ProjectSidebarProps) {
+  const [dropProject, setDropProject] = useState<{ projectId: string; drag: TaskDrag } | null>(null);
+
   return (
     <section className="sidebar" aria-label="Проекты">
       <div className="brand-row">
@@ -183,11 +196,33 @@ export function ProjectSidebar({
             {filteredProjects.map((project) => (
               <button
                 key={project.id}
-                className={
-                  selectedProject?.id === project.id ? "project-row selected" : "project-row"
-                }
+                className={`project-row${selectedProject?.id === project.id ? " selected" : ""}${
+                  draggedTask && dropProject?.drag === draggedTask && dropProject.projectId === project.id
+                    ? " project-drop-target" : ""
+                }`}
                 type="button"
                 onClick={() => onOpenProject(project.id)}
+                onDragOver={(event) => {
+                  if (draggedTask && draggedTask.projectId !== project.id && event.dataTransfer.types.includes(TASK_DRAG_TYPE)) {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    if (dropProject?.projectId !== project.id || dropProject.drag !== draggedTask) {
+                      setDropProject({ projectId: project.id, drag: draggedTask });
+                    }
+                  }
+                }}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                    setDropProject(null);
+                  }
+                }}
+                onDrop={(event) => {
+                  if (draggedTask && draggedTask.projectId !== project.id && event.dataTransfer.types.includes(TASK_DRAG_TYPE)) {
+                    event.preventDefault();
+                    setDropProject(null);
+                    onDropTask({ projectId: project.id });
+                  }
+                }}
               >
                 <span className="project-icon">{project.icon}</span>
                 <span className="project-copy">

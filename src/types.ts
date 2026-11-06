@@ -15,6 +15,20 @@ export type ProjectTask = {
   updatedAt: string;
 };
 
+export const TASK_DRAG_TYPE = "application/x-loom-task";
+
+export type TaskDrag = {
+  projectId: string;
+  taskId: string;
+  parentTaskId?: string;
+};
+
+export type TaskDropTarget = {
+  projectId: string;
+  taskId?: string;
+  after?: boolean;
+};
+
 export type MaterialKind = "text" | "pdf";
 
 export type MaterialLink = {

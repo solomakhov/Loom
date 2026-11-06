@@ -33,6 +33,7 @@ import { TaskSection } from "./components/TaskSection";
 import {
   deleteMaterialFile,
   loadWorkspace,
+  moveWorkspaceTask,
   saveWorkspaceChanges,
   subscribeToWorkspaceChanges,
   uploadPdfFile,
@@ -65,6 +66,8 @@ import {
   ProjectMaterial,
   ProjectStatus,
   ProjectTask,
+  TaskDrag,
+  TaskDropTarget,
   WorkspaceData,
 } from "./types";
 
@@ -423,10 +426,14 @@ function mergeRealtimeWorkspaces(
     remote.projects,
     projectSignature,
   );
+  const tasksWithProject = (workspace: WorkspaceData) =>
+    workspace.projects.flatMap((project) =>
+      project.tasks.map((task) => ({ ...task, projectId: project.id })),
+    );
   const mergedTasks = mergeEntityMaps(
-    flattenWorkspaceTasks(base),
-    flattenWorkspaceTasks(local),
-    flattenWorkspaceTasks(remote),
+    tasksWithProject(base),
+    tasksWithProject(local),
+    tasksWithProject(remote),
   );
   const mergedMaterials = mergeEntityMaps(
     base.materials,
@@ -434,23 +441,7 @@ function mergeRealtimeWorkspaces(
     remote.materials,
   );
   const tasksByProject = new Map<string, ProjectTask[]>();
-  const taskProjectIds = new Map<string, string>();
-
-  for (const workspace of [base, local, remote]) {
-    for (const project of workspace.projects) {
-      for (const task of project.tasks) {
-        taskProjectIds.set(task.id, project.id);
-      }
-    }
-  }
-
-  for (const task of mergedTasks.items) {
-    const projectId = taskProjectIds.get(task.id);
-
-    if (!projectId) {
-      continue;
-    }
-
+  for (const { projectId, ...task } of mergedTasks.items) {
     const projectTasks = tasksByProject.get(projectId) ?? [];
     projectTasks.push(task);
     tasksByProject.set(projectId, projectTasks);
@@ -458,10 +449,10 @@ function mergeRealtimeWorkspaces(
 
   return {
     workspace: {
-      projects: mergedProjects.items.map((project) => ({
-        ...project,
-        tasks: tasksByProject.get(project.id) ?? [],
-      })),
+      projects: mergedProjects.items.map((project) => {
+        const tasks = tasksByProject.get(project.id) ?? [];
+        return { ...project, tasks, progress: calculateProgress(tasks) };
+      }),
       materials: mergedMaterials.items,
     },
     hasConflict:
@@ -495,6 +486,8 @@ export function App() {
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [selectedMaterialId, setSelectedMaterialId] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [draggedTask, setDraggedTask] = useState<TaskDrag | null>(null);
+  const [isMovingTask, setIsMovingTask] = useState(false);
   const [projectSection, setProjectSection] = useState<ProjectSection>("tasks");
   const [materialScope, setMaterialScope] = useState<MaterialScope>("project");
   const [linkingMaterialId, setLinkingMaterialId] = useState("");
@@ -776,7 +769,13 @@ export function App() {
             return;
           }
 
-          const remoteWorkspace = await loadWorkspace({ importLocalIfEmpty: false });
+          let queue: Promise<void>;
+          let remoteWorkspace: WorkspaceData;
+          do {
+            queue = saveQueueRef.current;
+            await queue.catch(() => undefined);
+            remoteWorkspace = await loadWorkspace({ importLocalIfEmpty: false });
+          } while (queue !== saveQueueRef.current);
           const merged = mergeRealtimeWorkspaces(
             persistedWorkspaceRef.current,
             latestWorkspaceRef.current,
@@ -1084,18 +1083,18 @@ export function App() {
     });
   }
 
-  function openProject(projectId: string, section: ProjectSection = "tasks") {
+  function openProject(projectId: string, section: ProjectSection = "tasks", taskId = "") {
     markProjectOpened(projectId);
     pushNavigationUrl({
       projectId,
-      taskId: "",
+      taskId,
       section,
       materialScope: "project",
       materialId: "",
     });
     setSelectedId(projectId);
     setSelectedMaterialId("");
-    setSelectedTaskId("");
+    setSelectedTaskId(taskId);
     setProjectSection(section);
     setIsProjectDrawerOpen(false);
   }
@@ -1636,6 +1635,61 @@ export function App() {
     updateProjectTasks(project.id, normalizeTaskPositions(nextTasks));
   }
 
+  async function dropTask(target: TaskDropTarget) {
+    const drag = draggedTask;
+    setDraggedTask(null);
+    if (!drag || isMovingTask || isUploadingPdf || remoteConflict) {
+      return;
+    }
+
+    setIsMovingTask(true);
+    const flushPending = saveTimerRef.current !== null || saveStatus === "error";
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    if (flushPending) {
+      void persistWorkspace(latestWorkspaceRef.current);
+    }
+    workspaceVersionRef.current += 1;
+    setSaveStatus("saving");
+
+    const previousSave = flushPending || saveStatus === "saving"
+      ? saveQueueRef.current
+      : saveQueueRef.current.catch(() => undefined);
+    const moveOperation = previousSave.then(async () => {
+      const savedWorkspace = await moveWorkspaceTask(persistedWorkspaceRef.current, drag, target);
+      persistedWorkspaceRef.current = savedWorkspace;
+      latestWorkspaceRef.current = savedWorkspace;
+      setProjects(savedWorkspace.projects);
+      setMaterials(savedWorkspace.materials);
+    });
+    saveQueueRef.current = moveOperation;
+
+    try {
+      await moveOperation;
+      if (drag.projectId !== target.projectId) {
+        openProject(target.projectId, "tasks", drag.taskId);
+      }
+      setStorageError("");
+      setSaveStatus("saved");
+    } catch (error) {
+      console.error(error);
+      setSaveStatus("error");
+      if (error instanceof WorkspaceConflictError) {
+        try {
+          const remoteWorkspace = await loadWorkspace({ importLocalIfEmpty: false });
+          setRemoteConflict(remoteWorkspace);
+        } catch (loadError) {
+          console.error(loadError);
+        }
+      }
+      setStorageError(`Не удалось перенести задачу. ${getErrorMessage(error)}`);
+    } finally {
+      setIsMovingTask(false);
+    }
+  }
+
   function addMaterial(project?: Project, taskId?: string) {
     const now = new Date().toISOString();
     const material: ProjectMaterial = {
@@ -1918,7 +1972,7 @@ export function App() {
     <main className="app-shell">
       <div
         className={isProjectDrawerOpen ? "sidebar-shell open" : "sidebar-shell"}
-        inert={isMobileLayout && !isProjectDrawerOpen}
+        inert={isMovingTask || (isMobileLayout && !isProjectDrawerOpen)}
       >
         <ProjectSidebar
           hasSession={Boolean(session)}
@@ -1929,6 +1983,8 @@ export function App() {
           projects={projects}
           filteredProjects={filteredProjects}
           selectedProject={selectedProject}
+          draggedTask={draggedTask}
+          onDropTask={dropTask}
           onQueryChange={setQuery}
           onStatusFilterChange={setStatusFilter}
           onSortModeChange={changeProjectSortMode}
@@ -1966,7 +2022,7 @@ export function App() {
       <section
         className="project-view"
         aria-label="Обзор проекта"
-        inert={isMobileLayout && isProjectDrawerOpen}
+        inert={isMovingTask || (isMobileLayout && isProjectDrawerOpen)}
       >
         <button
           ref={mobileProjectButtonRef}
@@ -2093,6 +2149,9 @@ export function App() {
                 onUpdateTask={updateTask}
                 onDeleteTask={deleteTask}
                 onMoveTask={moveTask}
+                draggedTask={draggedTask}
+                onDragTask={remoteConflict || isUploadingPdf ? undefined : setDraggedTask}
+                onDropTask={dropTask}
                 onAddMaterial={(project, taskId) => addMaterial(project, taskId)}
                 onOpenMaterial={(materialId) => {
                   pushNavigationUrl({

@@ -1,7 +1,15 @@
-import { ArrowDown, ArrowUp, FileUp, Plus, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, FileUp, GripVertical, Plus, Trash2, X } from "lucide-react";
+import { useState, type DragEvent } from "react";
 import { MaterialPreview } from "../MaterialEditor";
 import { formatFileSize, type TaskTreeItem } from "../projectModel";
-import type { Project, ProjectMaterial, ProjectTask } from "../types";
+import {
+  TASK_DRAG_TYPE,
+  type Project,
+  type ProjectMaterial,
+  type ProjectTask,
+  type TaskDrag,
+  type TaskDropTarget,
+} from "../types";
 
 type TaskSectionProps = {
   project: Project;
@@ -24,6 +32,9 @@ type TaskSectionProps = {
   ) => void;
   onDeleteTask: (project: Project, taskId: string) => void;
   onMoveTask: (project: Project, taskId: string, direction: -1 | 1) => void;
+  draggedTask: TaskDrag | null;
+  onDragTask?: (drag: TaskDrag | null) => void;
+  onDropTask: (target: TaskDropTarget) => void;
   onAddMaterial: (project: Project, taskId: string) => void;
   onOpenMaterial: (materialId: string) => void;
 };
@@ -44,9 +55,39 @@ export function TaskSection({
   onUpdateTask,
   onDeleteTask,
   onMoveTask,
+  draggedTask,
+  onDragTask,
+  onDropTask,
   onAddMaterial,
   onOpenMaterial,
 }: TaskSectionProps) {
+  const [dropTarget, setDropTarget] = useState<{ taskId: string; after: boolean } | null>(null);
+  let indicatorId = dropTarget?.taskId;
+  if (dropTarget?.after) {
+    const index = taskItems.findIndex(({ task }) => task.id === dropTarget.taskId);
+    if (index !== -1) {
+      const depth = taskItems[index].depth;
+      for (let child = index + 1; child < taskItems.length && taskItems[child].depth > depth; child += 1) {
+        indicatorId = taskItems[child].task.id;
+      }
+    }
+  }
+
+  function getDropTarget(event: DragEvent<HTMLDivElement>, task: ProjectTask) {
+    if (
+      !onDragTask ||
+      !event.dataTransfer.types.includes(TASK_DRAG_TYPE) ||
+      draggedTask?.projectId !== project.id ||
+      draggedTask.taskId === task.id ||
+      draggedTask.parentTaskId !== task.parentTaskId
+    ) {
+      return;
+    }
+
+    const row = event.currentTarget.getBoundingClientRect();
+    return { taskId: task.id, after: event.clientY >= row.top + row.height / 2 };
+  }
+
   return (
     <section className="section-block tasks-section">
       <div className="section-title-row">
@@ -88,15 +129,61 @@ export function TaskSection({
                 "task-row",
                 task.done ? "done" : "",
                 selectedTaskId === task.id ? "selected" : "",
+                draggedTask?.taskId === task.id ? "task-dragging" : "",
+                draggedTask && indicatorId === task.id
+                  ? dropTarget?.after ? "task-drop-after" : "task-drop-before"
+                  : "",
               ]
                 .filter(Boolean)
                 .join(" ")}
               key={task.id}
               data-task-id={task.id}
               onClick={() => onSelectTask(task.id)}
+              onDragOver={(event) => {
+                const target = getDropTarget(event, task);
+                if (target) {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  if (target.taskId !== dropTarget?.taskId || target.after !== dropTarget.after) {
+                    setDropTarget(target);
+                  }
+                }
+              }}
+              onDragLeave={(event) => {
+                if (dropTarget?.taskId === task.id && !event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  setDropTarget(null);
+                }
+              }}
+              onDrop={(event) => {
+                const target = getDropTarget(event, task);
+                if (target) {
+                  event.preventDefault();
+                  setDropTarget(null);
+                  onDropTask({ projectId: project.id, ...target });
+                }
+              }}
               style={{ marginLeft: depth ? `${depth * 20}px` : undefined }}
             >
               <div className="task-row-main">
+                {onDragTask ? (
+                  <span
+                    className="task-drag-handle"
+                    draggable
+                    title="Перетащить задачу. Можно перенести на другой проект в боковой панели."
+                    onClick={(event) => event.stopPropagation()}
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData(TASK_DRAG_TYPE, task.id);
+                      onDragTask({ projectId: project.id, taskId: task.id, parentTaskId: task.parentTaskId });
+                    }}
+                    onDragEnd={() => {
+                      setDropTarget(null);
+                      onDragTask(null);
+                    }}
+                  >
+                    <GripVertical size={16} aria-hidden="true" />
+                  </span>
+                ) : null}
                 <input
                   checked={task.done}
                   type="checkbox"

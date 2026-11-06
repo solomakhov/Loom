@@ -918,6 +918,33 @@ h3 {
   text-decoration: line-through;
 }
 
+.task-drag-handle {
+  display: grid;
+  flex: 0 0 20px;
+  place-items: center;
+  padding: 6px 0;
+  color: #587067;
+  cursor: grab;
+  user-select: none;
+}
+
+.task-row.task-dragging {
+  opacity: 0.55;
+}
+
+.task-row.task-drop-before {
+  box-shadow: 0 -3px 0 #1e7a59;
+}
+
+.task-row.task-drop-after {
+  box-shadow: 0 3px 0 #1e7a59;
+}
+
+.project-row.project-drop-target {
+  outline: 2px solid #1e7a59;
+  outline-offset: -2px;
+}
+
 .task-row .icon-button {
   width: 34px;
   height: 34px;
