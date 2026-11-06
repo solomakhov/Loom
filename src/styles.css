@@ -940,6 +940,12 @@ h3 {
   box-shadow: 0 3px 0 #1e7a59;
 }
 
+.task-row.task-drop-inside {
+  background: #e4f3eb;
+  outline: 2px solid #1e7a59;
+  outline-offset: -2px;
+}
+
 .project-row.project-drop-target {
   outline: 2px solid #1e7a59;
   outline-offset: -2px;

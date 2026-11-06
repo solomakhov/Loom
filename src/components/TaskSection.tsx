@@ -1,7 +1,7 @@
 import { ArrowDown, ArrowUp, FileUp, GripVertical, Plus, Trash2, X } from "lucide-react";
-import { useState, type DragEvent } from "react";
+import { useMemo, useState, type DragEvent } from "react";
 import { MaterialPreview } from "../MaterialEditor";
-import { formatFileSize, type TaskTreeItem } from "../projectModel";
+import { formatFileSize, getTaskDescendantIds, type TaskTreeItem } from "../projectModel";
 import {
   TASK_DRAG_TYPE,
   type Project,
@@ -9,6 +9,7 @@ import {
   type ProjectTask,
   type TaskDrag,
   type TaskDropTarget,
+  type TaskPlacement,
 } from "../types";
 
 type TaskSectionProps = {
@@ -61,9 +62,13 @@ export function TaskSection({
   onAddMaterial,
   onOpenMaterial,
 }: TaskSectionProps) {
-  const [dropTarget, setDropTarget] = useState<{ taskId: string; after: boolean } | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ taskId: string; placement: TaskPlacement } | null>(null);
+  const draggedBranch = useMemo(
+    () => draggedTask ? getTaskDescendantIds(project.tasks, draggedTask.taskId) : null,
+    [draggedTask, project.tasks],
+  );
   let indicatorId = dropTarget?.taskId;
-  if (dropTarget?.after) {
+  if (dropTarget?.placement === "after") {
     const index = taskItems.findIndex(({ task }) => task.id === dropTarget.taskId);
     if (index !== -1) {
       const depth = taskItems[index].depth;
@@ -78,14 +83,15 @@ export function TaskSection({
       !onDragTask ||
       !event.dataTransfer.types.includes(TASK_DRAG_TYPE) ||
       draggedTask?.projectId !== project.id ||
-      draggedTask.taskId === task.id ||
-      draggedTask.parentTaskId !== task.parentTaskId
+      draggedBranch?.has(task.id)
     ) {
       return;
     }
 
     const row = event.currentTarget.getBoundingClientRect();
-    return { taskId: task.id, after: event.clientY >= row.top + row.height / 2 };
+    const offset = (event.clientY - row.top) / row.height;
+    const placement: TaskPlacement = offset < 0.25 ? "before" : offset > 0.75 ? "after" : "inside";
+    return { taskId: task.id, placement };
   }
 
   return (
@@ -130,8 +136,8 @@ export function TaskSection({
                 task.done ? "done" : "",
                 selectedTaskId === task.id ? "selected" : "",
                 draggedTask?.taskId === task.id ? "task-dragging" : "",
-                draggedTask && indicatorId === task.id
-                  ? dropTarget?.after ? "task-drop-after" : "task-drop-before"
+                draggedTask && dropTarget && indicatorId === task.id
+                  ? `task-drop-${dropTarget.placement}`
                   : "",
               ]
                 .filter(Boolean)
@@ -144,7 +150,7 @@ export function TaskSection({
                 if (target) {
                   event.preventDefault();
                   event.dataTransfer.dropEffect = "move";
-                  if (target.taskId !== dropTarget?.taskId || target.after !== dropTarget.after) {
+                  if (target.taskId !== dropTarget?.taskId || target.placement !== dropTarget.placement) {
                     setDropTarget(target);
                   }
                 }
@@ -169,7 +175,7 @@ export function TaskSection({
                   <span
                     className="task-drag-handle"
                     draggable
-                    title="Перетащить задачу. Можно перенести на другой проект в боковой панели."
+                    title="Перетащить задачу. Сбросьте в центр строки для вложения или у края для вставки рядом."
                     onClick={(event) => event.stopPropagation()}
                     onDragStart={(event) => {
                       event.dataTransfer.effectAllowed = "move";

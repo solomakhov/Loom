@@ -23,11 +23,11 @@ export type TaskDrag = {
   parentTaskId?: string;
 };
 
-export type TaskDropTarget = {
-  projectId: string;
-  taskId?: string;
-  after?: boolean;
-};
+export type TaskPlacement = "before" | "after" | "inside";
+
+export type TaskDropTarget =
+  | { projectId: string; taskId: string; placement: TaskPlacement }
+  | { projectId: string; taskId?: never; placement?: never };
 
 export type MaterialKind = "text" | "pdf";
 

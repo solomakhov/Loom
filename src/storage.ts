@@ -1245,22 +1245,32 @@ export async function moveWorkspaceTask(
   const acrossProjects = drag.projectId !== target.projectId;
   const anchor = destination?.tasks.find((item) => item.id === target.taskId);
 
-  if (
-    !source || !destination || !task || task.parentTaskId !== drag.parentTaskId ||
-    (!acrossProjects && (!anchor || anchor.id === task.id || anchor.parentTaskId !== task.parentTaskId))
-  ) {
+  if (!source || !destination || !task || task.parentTaskId !== drag.parentTaskId) {
+    throw new WorkspaceConflictError("task", drag.taskId);
+  }
+
+  const branch = getTaskDescendantIds(source.tasks, task.id);
+  if (!acrossProjects && (!anchor || !target.placement || branch.has(anchor.id))) {
     throw new WorkspaceConflictError("task", drag.taskId);
   }
 
   if (supabase) {
-    const { data, error } = await supabase.rpc("move_project_task", {
+    const taskArgs = {
       task_id: task.id,
-      source_project_id: source.id,
-      target_project_id: destination.id,
       expected_revision: task.revision,
-      anchor_task_id: target.taskId ?? null,
-      place_after: target.after ?? false,
-    });
+    };
+    const { data, error } = acrossProjects
+      ? await supabase.rpc("move_project_task", {
+          ...taskArgs,
+          source_project_id: source.id,
+          target_project_id: destination.id,
+        })
+      : await supabase.rpc("place_project_task", {
+          ...taskArgs,
+          task_project_id: source.id,
+          anchor_task_id: target.taskId,
+          placement: target.placement,
+        });
 
     if (error) {
       if (error.code === "40001") {
@@ -1292,7 +1302,6 @@ export async function moveWorkspaceTask(
   let destinationTasks = destination.tasks;
 
   if (acrossProjects) {
-    const branch = getTaskDescendantIds(source.tasks, task.id);
     sourceTasks = normalizeTaskPositions(source.tasks.filter((item) => !branch.has(item.id)));
     const destinationRoots = getTaskSiblings(destination.tasks);
     const lastPosition = destinationRoots[destinationRoots.length - 1]?.position ?? -1;
@@ -1305,12 +1314,25 @@ export async function moveWorkspaceTask(
       ),
     ];
   } else {
-    const siblings = getTaskSiblings(source.tasks, task.parentTaskId).filter((item) => item.id !== task.id);
-    const index = siblings.findIndex((item) => item.id === target.taskId) + (target.after ? 1 : 0);
+    const parentTaskId = target.placement === "inside" ? anchor?.id : anchor?.parentTaskId;
+    const siblings = getTaskSiblings(source.tasks, parentTaskId).filter((item) => item.id !== task.id);
+    const index = target.placement === "inside"
+      ? siblings.length
+      : siblings.findIndex((item) => item.id === target.taskId) + (target.placement === "after" ? 1 : 0);
     siblings.splice(index, 0, task);
     const positions = new Map(siblings.map((item, position) => [item.id, position]));
+    if (parentTaskId !== task.parentTaskId) {
+      getTaskSiblings(source.tasks, task.parentTaskId)
+        .filter((item) => item.id !== task.id)
+        .forEach((item, position) => positions.set(item.id, position));
+    }
     sourceTasks = source.tasks.map((item) => {
       const position = positions.get(item.id);
+      if (item.id === task.id) {
+        return position === item.position && parentTaskId === item.parentTaskId
+          ? item
+          : { ...item, parentTaskId, position, updatedAt: now };
+      }
       return position === undefined || position === item.position
         ? item
         : { ...item, position, updatedAt: now };
